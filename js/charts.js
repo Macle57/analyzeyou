@@ -1,0 +1,304 @@
+// Small hand-rolled SVG charts. Colours come from CSS classes so both themes work without re-rendering.
+
+const NS = 'http://www.w3.org/2000/svg';
+
+export function S(tag, attrs = {}, ...kids) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+  for (const kid of kids) if (kid != null) n.append(kid);
+  return n;
+}
+
+// ---------- tooltip ----------
+const tipEl = () => document.getElementById('tip');
+
+export function tipBox(title, rows = [], note) {
+  const f = document.createDocumentFragment();
+  if (title) { const s = document.createElement('strong'); s.textContent = title; f.append(s); }
+  for (const [k, v] of rows) {
+    const r = document.createElement('div'); r.className = 'tr';
+    const a = document.createElement('span'); a.textContent = k;
+    const b = document.createElement('span'); b.textContent = v;
+    r.append(a, b); f.append(r);
+  }
+  if (note) { const d = document.createElement('div'); d.textContent = note; d.style.opacity = '0.75'; f.append(d); }
+  return f;
+}
+
+export function showTip(x, y, content) {
+  const t = tipEl();
+  t.replaceChildren(content);
+  t.hidden = false;
+  const r = t.getBoundingClientRect();
+  let left = x + 14, top = y + 16;
+  if (left + r.width > innerWidth - 8) left = x - r.width - 14;
+  if (left < 8) left = 8;
+  if (top + r.height > innerHeight - 8) top = y - r.height - 12;
+  if (top < 8) top = 8;
+  t.style.left = left + 'px';
+  t.style.top = top + 'px';
+}
+export function hideTip() { tipEl().hidden = true; }
+
+// Hover tooltips for plain HTML marks: put data on the node with setTip(node, fn).
+const tipFns = new WeakMap();
+export function setTip(node, fn) { tipFns.set(node, fn); node.dataset.tip = '1'; }
+document.addEventListener('pointermove', (e) => {
+  const n = e.target.closest?.('[data-tip]');
+  if (n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
+  else if (!e.target.closest?.('svg[data-chart]')) hideTip();
+});
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('[data-tip], svg[data-chart]')) hideTip(); });
+addEventListener('scroll', hideTip, { passive: true });
+
+// ---------- scales ----------
+export function niceMax(max, target = 4) {
+  if (!(max > 0)) return { max: 1, step: 1 };
+  const raw = max / target;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const m = [1, 2, 2.5, 5, 10].find((k) => k * p >= raw) * p;
+  return { max: Math.ceil(max / m - 1e-9) * m, step: m };
+}
+
+const TIME_STEPS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 28800, 43200, 86400, 172800, 345600, 864000];
+export function timeTick(v) {
+  if (v === 0) return '0';
+  if (v < 3600) return Math.round(v / 60) + 'm';
+  const h = Math.floor(v / 3600), m = Math.round((v % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+function timeScale(max) {
+  const step = TIME_STEPS.find((s) => max / s <= 4.2) || TIME_STEPS[TIME_STEPS.length - 1];
+  const top = Math.max(step, Math.ceil(max / step - 1e-9) * step);
+  const ticks = [];
+  for (let v = 0; v <= top + 1; v += step) ticks.push(v);
+  return { max: top, ticks };
+}
+
+function roundedTop(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+function roundedBottom(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y}V${y + h - r}Q${x},${y + h} ${x + r},${y + h}H${x + w - r}Q${x + w},${y + h} ${x + w},${y + h - r}V${y}Z`;
+}
+
+function pickTicks(n, maxLabels) {
+  if (n <= maxLabels) return [...Array(n).keys()];
+  const out = [];
+  const step = (n - 1) / (maxLabels - 1);
+  for (let i = 0; i < maxLabels; i++) out.push(Math.round(i * step));
+  return [...new Set(out)];
+}
+
+// ---------- day chart: time columns above, rating won/lost below, one shared x ----------
+export function dayChart(root, buckets, o) {
+  root.replaceChildren();
+  const n = buckets.length;
+  if (!n) return;
+  const W = Math.max(280, Math.floor(root.clientWidth));
+  const small = W < 520;
+  const showElo = buckets.some((b) => b.eloGained || b.eloLost);
+  const m = { l: 44, r: 6, t: 24, b: 24 };
+  const h1 = small ? 150 : 210, gap = 54, h2 = showElo ? (small ? 96 : 120) : 0;
+  const H = m.t + h1 + (showElo ? gap + h2 : 0) + m.b;
+  const iw = W - m.l - m.r, band = iw / n;
+  const bw = Math.max(1, Math.min(24, band >= 8 ? band - 2 : band >= 4 ? band - 1 : band));
+  const bx = (i) => m.l + i * band + (band - bw) / 2;
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'group', 'aria-label': o.label, 'data-chart': 'day' });
+
+  // time panel
+  const ts = timeScale(Math.max(60, ...buckets.map((b) => b.time)));
+  const y1 = (v) => m.t + h1 - (v / ts.max) * h1;
+  svg.append(S('text', { x: 0, y: 12, class: 'cap' }, 'Time played'));
+  for (const v of ts.ticks) {
+    svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y1(v), y2: y1(v), class: v ? 'grid' : 'base' }));
+    svg.append(S('text', { x: m.l - 8, y: y1(v) + 4, 'text-anchor': 'end', class: 'tick' }, timeTick(v)));
+  }
+  const selBand = S('rect', { class: 'sel-band', y: m.t - 4, height: H - m.t - m.b + 4, width: band, visibility: 'hidden' });
+  const hovBand = S('rect', { class: 'hover-band', y: m.t - 4, height: H - m.t - m.b + 4, width: band, visibility: 'hidden' });
+  svg.append(selBand, hovBand);
+
+  let maxI = 0;
+  buckets.forEach((b, i) => {
+    if (b.time > buckets[maxI].time) maxI = i;
+    let acc = 0;
+    const segs = o.classes.map((c) => ({ c, v: b.byClass?.[c.key]?.time || 0 })).filter((s) => s.v > 0);
+    segs.forEach((s, k) => {
+      const yTop = y1(acc + s.v), yBot = y1(acc);
+      const top = k === segs.length - 1;
+      const g = top || bw < 4 ? 0 : 2; // surface gap between stacked segments
+      const hh = Math.max(top ? 1 : 0.5, yBot - yTop - g);
+      svg.append(top && bw >= 5
+        ? S('path', { d: roundedTop(bx(i), yTop, bw, hh, 4), class: s.c.cls })
+        : S('rect', { x: bx(i), y: yTop + g, width: bw, height: hh, class: s.c.cls }));
+      acc += s.v;
+    });
+  });
+  if (buckets[maxI].time > 0) {
+    const x = Math.min(W - m.r - 30, Math.max(m.l + 30, bx(maxI) + bw / 2));
+    svg.append(S('text', { x, y: y1(buckets[maxI].time) - 6, 'text-anchor': 'middle', class: 'lab' }, o.fmtTime(buckets[maxI].time)));
+  }
+
+  // rating panel
+  if (showElo) {
+    const y0 = m.t + h1 + gap;
+    const up = niceMax(Math.max(1, ...buckets.map((b) => b.eloGained)), 2);
+    const dn = niceMax(Math.max(1, ...buckets.map((b) => b.eloLost)), 2);
+    const step = Math.max(up.step, dn.step);
+    const upMax = Math.ceil(up.max / step) * step, dnMax = Math.ceil(dn.max / step) * step;
+    const y2 = (v) => y0 + ((upMax - v) / (upMax + dnMax)) * h2;
+    svg.append(S('text', { x: 0, y: y0 - 16, class: 'cap' }, 'Rating won and lost'));
+    for (let v = -dnMax; v <= upMax + 1e-9; v += step) {
+      svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y2(v), y2: y2(v), class: v ? 'grid' : 'base' }));
+      svg.append(S('text', { x: m.l - 8, y: y2(v) + 4, 'text-anchor': 'end', class: 'tick' }, (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v)));
+    }
+    buckets.forEach((b, i) => {
+      if (b.eloGained > 0) {
+        const hh = Math.max(1, y2(0) - y2(b.eloGained) - 1);
+        svg.append(bw >= 5 ? S('path', { d: roundedTop(bx(i), y2(0) - 1 - hh, bw, hh, 3), class: 'f-win' }) : S('rect', { x: bx(i), y: y2(0) - 1 - hh, width: bw, height: hh, class: 'f-win' }));
+      }
+      if (b.eloLost > 0) {
+        const hh = Math.max(1, y2(-b.eloLost) - y2(0) - 1);
+        svg.append(bw >= 5 ? S('path', { d: roundedBottom(bx(i), y2(0) + 1, bw, hh, 3), class: 'f-loss' }) : S('rect', { x: bx(i), y: y2(0) + 1, width: bw, height: hh, class: 'f-loss' }));
+      }
+      if (band >= 7 && (b.eloGained || b.eloLost)) {
+        svg.append(S('rect', { x: bx(i) - 2, y: y2(b.eloNet) - 1, width: bw + 4, height: 2, class: 'f-ink' }));
+      }
+    });
+  }
+
+  // x labels
+  const yx = H - 6;
+  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (small ? 64 : 84))))) {
+    const x = m.l + i * band + band / 2;
+    const anchor = x < m.l + 24 ? 'start' : x > W - m.r - 24 ? 'end' : 'middle';
+    svg.append(S('text', { x: anchor === 'start' ? m.l : anchor === 'end' ? W - m.r : x, y: yx, 'text-anchor': anchor, class: 'tick' }, o.tick(buckets[i])));
+  }
+
+  // interaction
+  const hit = S('rect', { x: m.l, y: 0, width: iw, height: H, fill: 'transparent', style: 'cursor:pointer' });
+  svg.append(hit);
+  let cur = -1;
+  const place = (rect, i) => { rect.setAttribute('x', m.l + i * band); rect.setAttribute('visibility', 'visible'); };
+  const selI = buckets.findIndex((b) => b.key === o.selectedKey);
+  if (selI >= 0) place(selBand, selI);
+  const idxAt = (e) => {
+    const r = svg.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * W;
+    return Math.max(0, Math.min(n - 1, Math.floor((x - m.l) / band)));
+  };
+  const hover = (i, cx, cy) => {
+    cur = i; place(hovBand, i);
+    if (cx == null) {
+      const r = svg.getBoundingClientRect();
+      cx = r.left + ((m.l + i * band + band / 2) / W) * r.width; cy = r.top + 40;
+    }
+    showTip(cx, cy, o.tip(buckets[i]));
+  };
+  const leave = () => { cur = -1; hovBand.setAttribute('visibility', 'hidden'); hideTip(); };
+  hit.addEventListener('pointermove', (e) => hover(idxAt(e), e.clientX, e.clientY));
+  hit.addEventListener('pointerleave', leave);
+  hit.addEventListener('click', (e) => o.onSelect(buckets[idxAt(e)]));
+  svg.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const from = cur >= 0 ? cur : selI >= 0 ? selI : e.key === 'ArrowLeft' ? n : -1;
+      hover(Math.max(0, Math.min(n - 1, from + (e.key === 'ArrowLeft' ? -1 : 1))));
+    } else if ((e.key === 'Enter' || e.key === ' ') && cur >= 0) { e.preventDefault(); o.onSelect(buckets[cur]); }
+    else if (e.key === 'Escape') leave();
+  });
+  svg.addEventListener('blur', leave);
+  root.append(svg);
+}
+
+// ---------- line chart (rating over time) ----------
+export function lineChart(root, pts, o) {
+  root.replaceChildren();
+  if (!pts.length) return;
+  const W = Math.max(280, Math.floor(root.clientWidth));
+  const m = { l: 44, r: 56, t: 18, b: 24 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
+  const iw = W - m.l - m.r;
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'line' });
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  if (o.start != null) { lo = Math.min(lo, o.start); hi = Math.max(hi, o.start); }
+  const span = Math.max(10, hi - lo);
+  const step = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((s) => span / s <= 4.5) || 1000;
+  const yLo = Math.floor(lo / step) * step, yHi = Math.max(yLo + step, Math.ceil(hi / step) * step);
+  const x = (t) => (t1 === t0 ? m.l + iw / 2 : m.l + ((t - t0) / (t1 - t0)) * iw);
+  const y = (v) => m.t + h - ((v - yLo) / (yHi - yLo)) * h;
+  for (let v = yLo; v <= yHi; v += step) {
+    svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v === yLo ? 'base' : 'grid' }));
+    svg.append(S('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, v));
+  }
+  const nT = Math.max(2, Math.floor(iw / 110));
+  if (t1 > t0) for (let i = 0; i < nT; i++) {
+    const t = t0 + ((t1 - t0) * i) / (nT - 1);
+    svg.append(S('text', { x: x(t), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === nT - 1 ? 'end' : 'middle', class: 'tick' }, o.fmtX(t)));
+  } else svg.append(S('text', { x: x(t0), y: H - 6, 'text-anchor': 'middle', class: 'tick' }, o.fmtX(t0)));
+
+  let d = '';
+  pts.forEach((p, i) => { d += (i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1); });
+  svg.append(S('path', { d, class: 's-time', fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  const last = pts[pts.length - 1];
+  let peak = pts[0];
+  for (const p of pts) if (p.v > peak.v) peak = p;
+  const dot = (p, cls = 'f-time') => S('circle', { cx: x(p.t), cy: y(p.v), r: 4.5, class: cls + ' ring' });
+  if (peak !== last && x(last.t) - x(peak.t) > 46) {
+    svg.append(dot(peak));
+    svg.append(S('text', { x: x(peak.t), y: y(peak.v) - 9, 'text-anchor': x(peak.t) < m.l + 40 ? 'start' : 'middle', class: 'lab' }, `Peak ${peak.v}`));
+  }
+  svg.append(dot(last));
+  svg.append(S('text', { x: x(last.t) + 9, y: y(last.v) + 4, class: 'lab' }, last.v));
+
+  const cross = S('line', { y1: m.t, y2: m.t + h, class: 'base', visibility: 'hidden' });
+  const cdot = S('circle', { r: 4.5, class: 'f-ink ring', visibility: 'hidden' });
+  const hit = S('rect', { x: m.l, y: 0, width: iw + 8, height: H, fill: 'transparent' });
+  svg.append(cross, cdot, hit);
+  hit.addEventListener('pointermove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    const t = t1 === t0 ? t0 : t0 + ((px - m.l) / iw) * (t1 - t0);
+    let a = 0, b = pts.length - 1;
+    while (b - a > 1) { const mid = (a + b) >> 1; if (pts[mid].t < t) a = mid; else b = mid; }
+    const p = Math.abs(pts[a].t - t) <= Math.abs(pts[b].t - t) ? pts[a] : pts[b];
+    cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.setAttribute('visibility', 'visible');
+    cdot.setAttribute('cx', x(p.t)); cdot.setAttribute('cy', y(p.v)); cdot.setAttribute('visibility', 'visible');
+    showTip(e.clientX, e.clientY, o.tip(p));
+  });
+  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); cdot.setAttribute('visibility', 'hidden'); hideTip(); });
+  root.append(svg);
+}
+
+// ---------- plain columns (histogram, win rate by game number) ----------
+export function colChart(root, items, o) {
+  root.replaceChildren();
+  if (!items.length) return;
+  const W = Math.max(240, Math.floor(root.clientWidth));
+  const m = { l: 40, r: 6, t: 14, b: 24 }, h = 170, H = m.t + h + m.b;
+  const iw = W - m.l - m.r, n = items.length, band = iw / n, bw = Math.max(2, Math.min(24, band - 2));
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'col' });
+  const sc = o.max ? { max: o.max, step: o.step } : niceMax(Math.max(...items.map((d) => d.value || 0)), 4);
+  const y = (v) => m.t + h - (v / sc.max) * h;
+  for (let v = 0; v <= sc.max + 1e-9; v += sc.step) {
+    svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v ? 'grid' : 'base' }));
+    svg.append(S('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, o.fmtY ? o.fmtY(v) : v));
+  }
+  if (o.ref != null) svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(o.ref), y2: y(o.ref), class: 'ref' }));
+  const every = Math.ceil(n / Math.max(1, Math.floor(iw / (o.labelWidth || 34))));
+  items.forEach((d, i) => {
+    const x0 = m.l + i * band + (band - bw) / 2;
+    if (d.value != null) {
+      const hh = Math.max(d.value > 0 ? 1.5 : 0, y(0) - y(d.value));
+      if (hh > 0) svg.append(S('path', { d: roundedTop(x0, y(0) - hh, bw, hh, 4), class: d.cls || 'f-time' }));
+    }
+    if (i % every === 0) svg.append(S('text', { x: m.l + i * band + band / 2, y: H - 6, 'text-anchor': 'middle', class: 'tick' }, d.label));
+    const hitR = S('rect', { x: m.l + i * band, y: m.t, width: band, height: h, fill: 'transparent' });
+    hitR.addEventListener('pointermove', (e) => showTip(e.clientX, e.clientY, d.tip()));
+    hitR.addEventListener('pointerleave', hideTip);
+    svg.append(hitR);
+  });
+  root.append(svg);
+}
