@@ -310,14 +310,22 @@ export function dayChart(root, buckets, o) {
   // run of them a "not loaded" label where it fits: blank there means unknown, not "no games".
   if (buckets.some((b) => b.missing)) {
     svg.append(S('defs', {}, S('pattern', { id: 'missing-hatch', patternUnits: 'userSpaceOnUse', width: 6, height: 6, patternTransform: 'rotate(45)' },
-      S('rect', { width: 2, height: 6, class: 'hatch-line' }))));
+      S('rect', { width: 1.5, height: 6, class: 'hatch-line' }))));
     for (let i = 0; i < n;) {
       if (!buckets[i].missing) { i++; continue; }
       let j = i;
       while (j + 1 < n && buckets[j + 1].missing) j++;
       const x = m.l + i * band, w = (j - i + 1) * band;
-      svg.append(S('rect', { x, y: m.t - 4, width: w, height: H - m.t - m.b + 4, fill: 'url(#missing-hatch)', class: 'missing-band' }));
-      if (w >= textWidth('not loaded') + 8) svg.append(S('text', { x: x + w / 2, y: m.t + 10, 'text-anchor': 'middle', class: 'tick missing-lab' }, 'not loaded'));
+      // One band per panel, so the gap between them (where the second panel's caption sits) stays clear.
+      const panels = [...(showTime ? [[m.t - 4, h1 + 4]] : []), ...(showElo ? [[m.t + h1 + gap, h2]] : [])];
+      for (const [py, ph] of panels) svg.append(S('rect', { x, y: py, width: w, height: ph, fill: 'url(#missing-hatch)', class: 'missing-band' }));
+      // The label sits on a plain patch of the surface so the hatch never runs through its letters.
+      const tw = textWidth('not loaded') + 16;
+      if (w >= tw + 6 && panels.length) {
+        const ly = panels[0][0] + 8;
+        svg.append(S('rect', { x: x + w / 2 - tw / 2, y: ly, width: tw, height: 20, rx: 10, class: 'missing-pill' }));
+        svg.append(S('text', { x: x + w / 2, y: ly + 14, 'text-anchor': 'middle', class: 'cap missing-lab' }, 'not loaded'));
+      }
       i = j + 1;
     }
   }

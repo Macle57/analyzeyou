@@ -275,13 +275,23 @@ function quipContext(d, games, f) {
  * The remarks for a whole range: Map of 'YYYY-MM-DD' -> line. `days` are the range's days in date order
  * (stats.days) and `games` the list their gameIdx point into. The same input always gives the same map.
  */
+// A theme is one joke however it is worded: "lost one game and left" four times in a range is the same
+// remark four times. So no theme speaks more than twice in a range, and the two whose lines are all
+// the same thought (the single lost game, the small hours) speak once unless the range is a long one.
+// A day that would repeat a theme goes to its next reason or stays quiet. The hour marks (4, 7 and
+// 10 hours) are exempt: they are what the remarks are for, and each of their lines is its own thought.
+const HOUR_THEMES = new Set(['h10', 'h7', 'h4']);
+const ONE_NOTE = new Set(['one', 'night']);
 export function planQuips(days, games, f) {
-  const used = new Set(), out = new Map();
+  const used = new Set(), out = new Map(), said = new Map();
+  const long = days.length > 60;
+  const capOf = (key) => (long || !ONE_NOTE.has(key) ? 2 : 1);
   for (const d of days) {
     if (!d.games) continue;
     const c = quipContext(d, d.gameIdx.map((i) => games[i]), f);
     for (const r of REASONS) {
       if (!r.when(c)) continue;
+      if (!HOUR_THEMES.has(r.key) && (said.get(r.key) || 0) >= capOf(r.key)) continue;
       const n = r.lines.length, start = dayNumber(d.date) % n;
       let hit = -1, line = null;
       for (let k = 0; k < n && hit < 0; k++) {
@@ -292,6 +302,7 @@ export function planQuips(days, games, f) {
       }
       if (hit < 0) continue; // this reason has said all it has: the day goes to its next reason
       used.add(`${r.key}:${hit}`);
+      said.set(r.key, (said.get(r.key) || 0) + 1);
       out.set(d.date, line);
       break;
     }
@@ -355,12 +366,19 @@ export function stickers(st, games, who, f) {
 
 // ---------- the same time, said another way (cycled by pressing a clock face) ----------
 export function equivalents(seconds) {
-  const x = (per) => { const v = seconds / per; return v >= 10 ? String(Math.round(v)) : v.toFixed(1); };
+  // Said the way a person would: "about half a night's sleep", "about one working week", then a count.
+  // Never "0.5 full nights" or "1.0 films".
+  const say = (per, half, one, many) => {
+    const v = seconds / per;
+    if (v < 0.75) return `about ${half}`;
+    if (v < 1.25) return `about ${one}`;
+    return many(v >= 10 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, ''));
+  };
   const out = [];
-  if (seconds >= 1 * H) out.push(`that is ${x(2 * H)} feature films, back to back`);
-  if (seconds >= 4 * H) out.push(`or ${x(8 * H)} full nights of sleep`);
-  if (seconds >= 16 * H) out.push(`or ${x(33 * H)} read-throughs of War and Peace`);
-  if (seconds >= 20 * H) out.push(`or ${x(40 * H)} working weeks`);
+  if (seconds >= 1 * H) out.push(`that is ${say(2 * H, 'half a feature film', 'one feature film', (n) => `${n} feature films, back to back`)}`);
+  if (seconds >= 4 * H) out.push(`or ${say(8 * H, 'half a night’s sleep', 'one full night’s sleep', (n) => `${n} full nights of sleep`)}`);
+  if (seconds >= 16 * H) out.push(`or ${say(33 * H, 'half a read-through of War and Peace', 'one read-through of War and Peace', (n) => `${n} read-throughs of War and Peace`)}`);
+  if (seconds >= 20 * H) out.push(`or ${say(40 * H, 'half a working week', 'one working week', (n) => `${n} working weeks`)}`);
   return out;
 }
 

@@ -500,6 +500,11 @@ function renderClock(e, who) {
   const ghost = long ? '8888:88' : '888:88:88';
   document.querySelectorAll('.lcd-ghost').forEach((g) => { g.textContent = ghost; });
   $('clockSr').textContent = has ? `${who} thought for ${durWords(me)}; opponents for ${durWords(opp)}.` : '';
+  // The two faces add up to a little less than the total time, and a careful reader will check. Lag
+  // that chess.com allows for and the wait before each side's first move run on neither clock.
+  const both = me + opp, gap = $('clockGap');
+  gap.hidden = !(has && t.time - both >= 60 && both / t.time < 0.99);
+  if (!gap.hidden) gap.textContent = `The two clocks add up to ${dur(both)} of the ${dur(t.time)} played. The rest ran on neither: the lag chess.com allows for, and the wait before each side’s first move.`;
   // Count up only when the figures on the faces change; a re-render with the same totals leaves them alone.
   const shown = `${clockText(me)}|${clockText(opp)}`;
   if (shown === clockShown) return;
@@ -1007,7 +1012,9 @@ function renderCalendar(e) {
   const panel = $('calPanel'), phone = innerWidth <= 600;
   const weeks = nodes.length / 8, room = (panel.clientWidth || 600) - (phone ? 30 : 38) - 40;
   // On a phone a square is something to tap: never under 22px, even if a long range then scrolls.
-  const c = Math.max(phone ? 22 : 13, Math.min(phone ? 38 : 24, Math.floor(room / weeks) - 3));
+  // The same on a tablet or any touch screen, where the squares may also grow to use the panel.
+  const touch = phone || matchMedia('(pointer: coarse)').matches;
+  const c = Math.max(touch ? 22 : 13, Math.min(phone ? 38 : touch ? 40 : 24, Math.floor(room / weeks) - 3));
   cal.closest('.cal-box').style.setProperty('--c', `${c}px`);
   // Weekday labels down the side: all seven when the squares are tall enough, else every other one.
   $('calWd').replaceChildren(el('span'), ...[0, 1, 2, 3, 4, 5, 6].map((d) => el('span', { text: c >= 15 || d % 2 === 0 ? dowName(d, true) : '' })));
@@ -1056,7 +1063,7 @@ function renderElo(e) {
   // A zero is "0", without a sign; a zero in running text is a dash.
   $('eloTiles').replaceChildren(
     tile('Rating won', p.gained ? sp('up', `+${num(p.gained)}`) : '0', `over ${plural(p.games, 'rated game')}`),
-    tile('Rating lost', p.lost ? sp('down', `${MINUS}${num(p.lost)}`) : '0', p.lost ? `${avg(p.lost / p.games)} points per rated game` : 'not a point dropped'),
+    tile('Rating lost', p.lost ? sp('down', `${MINUS}${num(p.lost)}`) : '0', p.lost ? `${avg(p.lost / p.games)} points for every rated game played` : 'not a point dropped'),
     tile('Net change', sp(p.net > 0 ? 'up' : p.net < 0 ? 'down' : '', signed(p.net)), `${p.start} to ${p.end}`),
     tile('Peak', String(p.peak), `lowest ${p.low}`),
   );
@@ -1255,7 +1262,8 @@ function renderSessions(e, who) {
       return el('div', { class: `row${few ? ' few' : ''}`, title: few ? `Only ${plural(d.games, 'game')}: not enough to judge.` : null },
         el('span', { class: 'rl', text: `${d.label.replace('-', '–')} games` }),
         wdlBar(d),
-        el('span', { class: 'rv' }, `${pct(rate(d))} won`, el('small', { text: few ? `${plural(d.games, 'game')}, not enough to judge` : `${signed(Math.round(d.eloNet / d.days))} a day` })));
+        // Too few to judge: the count stands in for a rate that would only mislead.
+        el('span', { class: 'rv' }, few ? plural(d.games, 'game') : `${pct(rate(d))} won`, el('small', { text: few ? 'not enough to judge' : `${signed(Math.round(d.eloNet / d.days))} a day` })));
     }),
     el('p', { class: 'note', text: `Days grouped by how many games ${who} played. The bar shows games won, drawn and lost; the last figure is the average rating change on such a day.` }));
 }
@@ -1295,7 +1303,8 @@ function renderGames(e, who) {
   })), { label: `Number of games by how long they lasted${parts ? `, split into ${mix.map((c) => c.label.toLowerCase()).join(', ')}` : ''}`, labelWidth: 52, ticks: (max) => histTicks(hist, max) });
   // Game length and the clock are about live games; with daily games only, both panels go.
   const timed = hasTime(st);
-  $('histChart').closest('.panel').hidden = !hist.length || !timed;
+  // One or two games make a chart of one or two bars, which says less than the "Game length" tile does.
+  $('histChart').closest('.panel').hidden = !hist.length || !timed || t.liveGames < 3;
   $('clockStats').closest('.panel').hidden = !timed;
 
   const tg = t.thinkGames;
@@ -1306,7 +1315,7 @@ function renderGames(e, who) {
     ['Left on the clock when winning', dur(c.avgLeftWin), null],
     ['Left on the clock when losing', dur(c.avgLeftLoss), null],
     // Both figures are the player's own, so they share one cell instead of sitting under "Opponents".
-    ['Games decided on time', `${num(c.timeoutWins)} won, ${num(c.timeoutLosses)} lost`, BOTH],
+    ['Games decided on time', c.timeoutWins || c.timeoutLosses ? `${num(c.timeoutWins)} won, ${num(c.timeoutLosses)} lost` : 'none', BOTH],
   ]) : el('p', { class: 'empty', text: 'These games carry no clock data.' }));
   if (tg && tg < t.games) $('clockStats').append(el('p', { class: 'note', text: `Clock figures cover the ${num(tg)} games that recorded move times.` }));
 
@@ -1326,7 +1335,7 @@ function renderGames(e, who) {
     const few = b.games < MIN_GAMES;
     return el('div', { class: `row wide${few ? ' few' : ''}`, title: few ? `Only ${plural(b.games, 'game')}: not enough to judge.` : null },
       el('span', { class: 'rl', text: b.name, title: few ? null : b.name }), wdlBar(b),
-      el('span', { class: 'rv' }, `${pct(rate(b))} won`, el('small', { text: few ? `${plural(b.games, 'game')}, not enough to judge` : plural(b.games, 'game') })));
+      el('span', { class: 'rv' }, few ? plural(b.games, 'game') : `${pct(rate(b))} won`, el('small', { text: few ? 'not enough to judge' : plural(b.games, 'game') })));
   }) : [el('p', { class: 'empty', text: 'No rated opponents to compare.' })]),
     diff.length ? el('p', { class: 'note', text: 'Opponents grouped by how their rating compared when the game was played.' }) : null);
 
@@ -1421,7 +1430,7 @@ function renderCompare() {
   // Where the strips start and end.
   ...(ok.length ? [el('div', { class: 'row cmp cmp-axis' }, el('span', { class: 'rl' }),
     el('span', { class: 'cmp-dates' }, el('span', { text: sd(ok[0].stats.range.from) }), el('span', { text: sd(ok[0].stats.range.to) })), el('span', { class: 'rv' }))] : []));
-  $('cmpNote').textContent = `Bar: total time. Strip: time per ${weekly ? 'week' : 'day'}. Same scales on every row. Pick a name to switch the page to that player.`;
+  $('cmpNote').textContent = `Bar: total time. Strip: time per ${weekly ? 'week' : 'day'}. Same scales on every row. The filled dot is the player on this page; pick a name to switch.`;
 
   const head = ['Player', 'Time', 'Games', 'Days played', 'On a day played', 'Average game', 'Won', 'Rating', 'Longest session, breaks included', 'Own share of clock time'];
   const rows = S.users.map((u, i) => {
@@ -1456,6 +1465,7 @@ const COLS = [
 // follow in the usual order and are reached by scrolling sideways.
 const PHONE_ORDER = ['date', 'time', 'games', 'eloNet', 'eloGained', 'eloLost', 'wins', 'draws', 'losses', 'bestWinStreak', 'bestLossStreak', 'avg'];
 const ledgerCols = () => (PHONE.matches ? PHONE_ORDER.map((k) => COLS.find((c) => c.k === k)) : COLS);
+const REHEAD = 12; // on a phone the ledger repeats its column names every this many rows
 // The date as a row shows it: without the year on a phone, where the range line above already has it.
 const ledgerDate = (d) => (PHONE.matches && !multiYear ? dfDayMon : dfLong).format(parseYmd(d.date));
 function ledgerRows(e) {
@@ -1486,7 +1496,7 @@ function renderLedger(e) {
   // does not add hundreds of tab stops.
   const body = rows.map((d) => d.gap ? el('tr', { class: 'missing' },
     el('td', { text: d.span === 1 ? ledgerDate(d) : `${sd(d.date)} to ${sd(d.last)}` }),
-    el('td', { class: 'missing-cell', colspan: cols.length - 1, text: `Not loaded${d.span > 1 ? `: ${plural(d.span, 'day')}` : ''}` }))
+    el('td', { class: 'missing-cell', colspan: cols.length - 1 }, el('span', { class: 'missing-tag', text: `Not loaded${d.span > 1 ? `: ${plural(d.span, 'day')}` : ''}` })))
     : el('tr', { class: d.missing ? 'partial' : null, title: d.missing ? 'Partly not loaded' : null, 'data-click': d.games ? '1' : null, 'aria-current': S.sel?.mode === 'day' && S.sel.key === d.date ? 'true' : null, onclick: d.games ? (ev) => open(d, ev) : null },
     ...cols.map((c) => c.k === 'date'
       ? el('td', null, d.games ? el('button', { type: 'button', class: 'cell-btn', text: ledgerDate(d), 'data-fk': `day:${d.date}`, onclick: (ev) => { ev.stopPropagation(); open(d, ev); } }) : ledgerDate(d))
@@ -1500,7 +1510,15 @@ function renderLedger(e) {
     avg: [t.liveGames ? durT(t.avgGame) : '–'],
   };
   const foot = el('tr', null, ...cols.map((c) => el('td', { class: c.k === 'date' ? null : `num ${totals[c.k][1] || ''}`, text: totals[c.k][0] })));
-  swap($('ledger'), el('thead', null, head), el('tbody', null, (body.length ? body : [el('tr', null, el('td', { colspan: cols.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
+  // On a phone the table is as tall as its rows and scrolls sideways, so its header cannot stay on
+  // screen: the column names are repeated every dozen rows instead (for the eye only; the real header
+  // is the one screen readers get), so some are always in view while reading.
+  if (PHONE.matches && body.length > REHEAD + 3) {
+    for (let i = body.length - (body.length % REHEAD || REHEAD); i >= REHEAD; i -= REHEAD) {
+      body.splice(i, 0, el('tr', { class: 'rehead', 'aria-hidden': 'true' }, ...cols.map((c) => el('td', { class: c.k === 'date' ? null : 'num', text: c.label }))));
+    }
+  }
+  swap($('ledger'), el('thead', null, head), el('tbody', null, (body.length ? body :[el('tr', null, el('td', { colspan: cols.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
 }
 function downloadCsv() {
   const e = focusEntry();
