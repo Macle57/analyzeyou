@@ -48,7 +48,7 @@
           <button type="button" data-preset="all">All time</button>
         </div>
         <div class="dates">
-          <label for="from">From</label>
+          <label for="from" class="from-label">From</label>
           <input id="from" type="date">
           <label for="to">to</label>
           <input id="to" type="date">
@@ -87,6 +87,11 @@
     <h1>How much of your life went into chess?</h1>
     <p class="lede">Type a chess.com username and pick a range. The page reads that player's public games straight from chess.com in your browser and adds up the clock: hours per day, the busiest days, rating won and lost, streaks, sessions and the habits hiding in between. Nothing is sent anywhere else.</p>
     <p class="try">Try one: <button type="button" class="link-btn" data-try="hikaru">hikaru</button>, <button type="button" class="link-btn" data-try="magnuscarlsen">magnuscarlsen</button>, <button type="button" class="link-btn" data-try="gothamchess">gothamchess</button></p>
+    <div class="verdicts">
+      <h2>Then it passes judgement</h2>
+      <p class="sub">There are seven verdicts. Which one you get depends on how long an average day with chess in it runs.</p>
+      <ol class="lineup" id="lineup"></ol>
+    </div>
   </section>
 
   <div id="results" hidden>
@@ -98,10 +103,23 @@
         <input id="addUser" type="text" spellcheck="false" autocapitalize="none" maxlength="25" placeholder="Compare with…">
         <button type="submit" class="ghost-btn">Add</button>
       </form>
+      <span class="add-note" id="addNote" hidden>Up to four players</span>
       <div class="seg" id="tcSeg" role="group" aria-label="Time control"></div>
       <label class="check"><input type="checkbox" id="ratedOnly"> Rated games only</label>
     </div>
     <p class="notice" id="notice" role="status" hidden></p>
+
+    <section id="secCompare" class="compare" hidden>
+      <h2>Player by player</h2>
+      <div class="panel">
+        <div class="rows cmp-rows" id="cmpRows"></div>
+        <p class="note" id="cmpNote"></p>
+        <details class="cmp-more" id="cmpMore">
+          <summary>All the numbers</summary>
+          <div class="table-wrap"><table class="ledger" id="compare"></table></div>
+        </details>
+      </div>
+    </section>
 
     <section class="summary">
       <div class="summary-top">
@@ -133,10 +151,16 @@
         <p class="sr-only" id="dayChartLive" aria-live="polite"></p>
       </div>
       <div class="detail" id="detail" hidden></div>
-      <div class="panel" id="calPanel">
-        <h3>Calendar</h3>
-        <div class="cal-wrap"><div class="cal" id="cal"></div></div>
-        <div class="scale" id="calScale"></div>
+      <div class="panel cal-panel" id="calPanel">
+        <div class="cal-side">
+          <h3>Calendar</h3>
+          <div class="cal-box"><div class="cal-wd" id="calWd" aria-hidden="true"></div><div class="cal-wrap"><div class="cal" id="cal"></div></div></div>
+          <div class="scale" id="calScale"></div>
+        </div>
+        <div class="cal-top">
+          <h3 id="topDaysTitle">Busiest days</h3>
+          <div class="rows" id="topDays"></div>
+        </div>
       </div>
     </section>
 
@@ -144,7 +168,7 @@
       <div class="block-head">
         <div>
           <h2>Rating</h2>
-          <p class="sub">Every rated game moves the rating. This is the sum of the ups, the sum of the downs, and where that left it.</p>
+          <p class="sub" id="eloSub">Every rated game moves the rating. This is the sum of the ups, the sum of the downs, and where that left it.</p>
         </div>
         <div class="seg" id="poolSeg" role="group" aria-label="Rating list"></div>
       </div>
@@ -182,7 +206,7 @@
 
     <section id="secSessions" class="block">
       <h2>Sessions</h2>
-      <p class="sub">A session is a run of games with less than 30 minutes between them.</p>
+      <p class="sub">A session is a run of games with less than 30 minutes between them. Its length runs from the first move to the last, breaks included, so it can be longer than the playing time inside it.</p>
       <dl class="tiles tiles-4" id="sessionTiles"></dl>
       <div class="two">
         <div class="panel">
@@ -232,12 +256,6 @@
           <div class="table-wrap"><table class="mini" id="opponents"></table></div>
         </div>
       </div>
-    </section>
-
-    <section id="secCompare" class="block" hidden>
-      <h2>Player by player</h2>
-      <p class="sub">Same range and filters for everyone. Pick a row to switch the page to that player.</p>
-      <div class="panel"><div class="table-wrap"><table class="ledger" id="compare"></table></div></div>
     </section>
 
     <section id="secLedger" class="block">

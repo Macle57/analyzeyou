@@ -17,7 +17,7 @@
   --surface-2: #eceee7;
   --ink: #141916;
   --ink-2: #454e48;
-  --muted: #667068;
+  --muted: #5b655d;
   --line: #d3d8cd;
   --axis: #b4bbae;
 
@@ -57,9 +57,9 @@
     --case: #1d2420;
     --case-2: #2a332d;
     --time: #3987e5;
-    --time-1: #9ec5f4;
-    --time-2: #3987e5;
-    --time-3: #1c5cab;
+    --time-1: #cde2fb;
+    --time-2: #5598e7;
+    --time-3: #184f95;
     --win: #14a896;
     --loss: #e2573c;
     --draw: #6f786f;
@@ -81,9 +81,9 @@
   --case: #1d2420;
   --case-2: #2a332d;
   --time: #3987e5;
-  --time-1: #9ec5f4;
-  --time-2: #3987e5;
-  --time-3: #1c5cab;
+  --time-1: #cde2fb;
+  --time-2: #5598e7;
+  --time-3: #184f95;
   --win: #14a896;
   --loss: #e2573c;
   --draw: #6f786f;
@@ -138,7 +138,7 @@ button { cursor: pointer; }
 .clock :focus-visible { outline-color: #9ec5f4; }
 .clock-controls { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: end; }
 .field { min-width: 0; }
-.field-user { flex: 1 1 260px; }
+.field-user { flex: 1 1 300px; }
 .user-row input { width: 100%; }
 .field label, .field-label { display: block; font-size: 13px; color: var(--case-muted); margin-bottom: 6px; }
 .user-row { display: flex; gap: 8px; }
@@ -146,8 +146,8 @@ button { cursor: pointer; }
   background: var(--case-2); border: 1px solid rgba(255, 255, 255, 0.14); color: var(--case-ink);
   border-radius: 9px; padding: 9px 12px; min-width: 0; height: 42px; color-scheme: dark;
 }
-.clock input[type="text"] { flex: 1; font-weight: 600; font-size: 17px; }
-.clock input::placeholder { color: #7e877f; font-weight: 400; }
+.clock input[type="text"] { flex: 1; font-weight: 600; font-size: 16px; }
+.clock input::placeholder { color: #939c94; font-weight: 400; }
 .go {
   background: var(--lcd); color: var(--lcd-ink); border: 0; border-radius: 9px; padding: 0 16px; height: 42px;
   font-weight: 700; white-space: nowrap; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.18);
@@ -160,13 +160,13 @@ button { cursor: pointer; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .presets button {
   background: transparent; color: var(--case-ink); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 9px;
-  padding: 0 11px; height: 42px; font-size: 14px; font-weight: 550; white-space: nowrap;
+  padding: 0 9px; height: 42px; font-size: 14px; font-weight: 550; white-space: nowrap;
 }
 .presets button:hover { background: var(--case-2); }
 .presets button[aria-pressed="true"] { background: var(--case-ink); color: var(--case); border-color: var(--case-ink); }
 .dates { display: flex; align-items: center; gap: 8px; }
 .dates label { margin: 0; }
-.dates input { font-size: 14px; padding: 9px 8px; width: 132px; }
+.dates input { font-size: 14px; padding: 9px 7px; width: 128px; }
 
 .faces { display: grid; grid-template-columns: 1fr 44px 1fr; gap: 0; align-items: center; margin-top: 22px; container-type: inline-size; }
 .face-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; min-height: 22px; }
@@ -175,7 +175,7 @@ button { cursor: pointer; }
 .lcd {
   position: relative; background: var(--lcd); color: var(--lcd-ink); border-radius: 8px;
   font-family: "DSEG7", var(--font); font-weight: 700; font-size: clamp(17px, 6.3cqw, 70px); line-height: 1;
-  padding: 0.38em 0.28em 0.34em; text-align: right; white-space: nowrap; overflow: hidden;
+  padding: 0.38em 0.28em calc(0.42em + 10px); text-align: right; white-space: nowrap; overflow: hidden;
   box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
 .lcd-ghost { opacity: 0.07; }
@@ -226,10 +226,16 @@ h1 { font-variation-settings: "wdth" 68; font-weight: 780; font-size: clamp(30px
 .summary h1 { max-width: 22ch; }
 .summary.is-stale, .block.is-stale { opacity: 0.45; transition: opacity 0.2s; }
 .tiles {
-  display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--line);
+  display: grid; grid-template-columns: repeat(var(--cols, 6), 1fr); gap: 1px; background: var(--line);
   border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 26px;
 }
-.tiles-4 { grid-template-columns: repeat(4, 1fr); margin-top: 18px; margin-bottom: 18px; }
+.tiles-4 { --cols: 4; margin-top: 18px; margin-bottom: 18px; }
+.tiles[data-n="1"] { --cols: 1; }
+.tiles[data-n="2"] { --cols: 2; }
+.tiles[data-n="3"] { --cols: 3; }
+.tiles[data-n="4"] { --cols: 4; }
+.tiles[data-n="5"] { --cols: 5; }
+
 .tile { background: var(--plane); padding: 14px 16px 14px 0; display: grid; grid-template-rows: subgrid; grid-row: span 3; row-gap: 0; align-content: start; }
 .tile + .tile { padding-left: 16px; }
 .tile dt { font-size: 14px; color: var(--ink-2); }
@@ -288,14 +294,14 @@ h3 { font-size: 15px; font-weight: 650; margin-bottom: 12px; }
 .detail-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .detail-head h3 { font-size: 20px; font-variation-settings: "wdth" 80; font-weight: 720; margin: 0; }
 .detail-head p { color: var(--ink-2); font-size: 14px; }
-.detail .tiles { background: var(--line); margin-top: 14px; grid-template-columns: repeat(6, 1fr); }
+.detail .tiles { background: var(--line); margin-top: 14px; }
 .detail .tile { background: var(--surface); }
 .detail .tile .v { font-size: 24px; }
 .detail .table-wrap { margin-top: 14px; max-height: 340px; }
 
 /* calendar */
 .cal-wrap, .heat-wrap, .table-wrap { overflow-x: auto; }
-.cal { --c: 13px; display: grid; grid-auto-flow: column; grid-template-rows: 18px repeat(7, var(--c)); grid-auto-columns: var(--c); gap: 3px; width: max-content; padding: 2px 2px 4px; }
+.cal { display: grid; grid-auto-flow: column; grid-template-rows: 18px repeat(7, var(--c)); grid-auto-columns: var(--c); gap: 3px; width: max-content; padding: 2px 2px 4px; }
 .cal span { font-size: 11px; color: var(--muted); white-space: nowrap; line-height: 16px; overflow: visible; width: var(--c); }
 .cal button { width: var(--c); height: var(--c); border: 0; padding: 0; border-radius: 3px; background: var(--surface-2); }
 .cal button:hover, .cal button:focus-visible, .cal button[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
@@ -391,12 +397,14 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 
 /* ---------- small screens ---------- */
 @media (max-width: 900px) {
-  .tiles { grid-template-columns: repeat(3, 1fr); }
-  .detail .tiles { grid-template-columns: repeat(3, 1fr); }
+  .tiles, .tiles[data-n="5"] { --cols: 3; }
   .tiles .tile:nth-child(3n + 1) { padding-left: 0; }
-  .tiles-4 { grid-template-columns: repeat(2, 1fr); }
-  .tiles-4 .tile:nth-child(3n + 1) { padding-left: 16px; }
-  .tiles-4 .tile:nth-child(2n + 1) { padding-left: 0; }
+  .tiles-4, .tiles[data-n="2"], .tiles[data-n="4"] { --cols: 2; }
+  .tiles-4 .tile:nth-child(n + 2), .tiles[data-n="2"] .tile:nth-child(n + 2), .tiles[data-n="4"] .tile:nth-child(n + 2) { padding-left: 16px; }
+  .tiles-4 .tile:nth-child(2n + 1), .tiles[data-n="2"] .tile:nth-child(2n + 1), .tiles[data-n="4"] .tile:nth-child(2n + 1) { padding-left: 0; }
+  .tiles[data-n="1"] { --cols: 1; }
+  /* an odd tile out takes the rest of its row, so no empty grey cell is left */
+  .tiles[data-n="5"] .tile:last-child { grid-column: span 2; }
   .two { grid-template-columns: 1fr; gap: 0; }
   .insights { grid-template-columns: 1fr; }
   .filters .seg { margin-left: 0; }
@@ -407,19 +415,23 @@ td .wdl { display: inline-flex; vertical-align: middle; }
   .top-note { order: 3; flex: 1 1 100%; margin-top: -2px; }
   .clock { padding: 14px; border-radius: 18px; }
   .field-range, .field-user { flex: 1 1 100%; }
-  .dates { flex: 1 1 100%; }
-  .dates input { width: auto; }
+  .range-row, .presets { width: 100%; }
   .presets button { flex: 1 1 auto; padding: 0 8px; }
-  .dates input { flex: 1; }
+  /* two equal columns, each label above its input: fits from 320px up */
+  .dates { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto; grid-auto-flow: column; gap: 4px 8px; }
+  .dates label { font-size: 12px; }
+  .dates input { width: 100%; min-width: 0; padding: 9px 6px; font-size: 13.5px; }
   .faces { grid-template-columns: 1fr 18px 1fr; }
   .lever i { width: 6px; height: 34px; }
   .lcd { padding: 0.5em 0.3em 0.46em; border-radius: 6px; }
   .lcd-val { top: 0.5em; right: 0.3em; }
   .face-flag { display: none; }
   .face-foot { font-size: 12px; }
-  .tiles, .detail .tiles { grid-template-columns: repeat(2, 1fr); }
-  .tiles .tile:nth-child(n) { padding-left: 14px; }
-  .tiles .tile:nth-child(2n + 1) { padding-left: 0; }
+  .tiles, .tiles[data-n="3"], .tiles[data-n="5"] { --cols: 2; }
+  .tiles .tile:nth-child(n), .tiles-4 .tile:nth-child(n), .tiles[data-n] .tile:nth-child(n) { padding-left: 14px; }
+  .tiles .tile:nth-child(2n + 1), .tiles-4 .tile:nth-child(2n + 1), .tiles[data-n] .tile:nth-child(2n + 1) { padding-left: 0; }
+  .tiles[data-n="1"] { --cols: 1; }
+  .tiles[data-n="3"] .tile:last-child, .tiles[data-n="5"] .tile:last-child { grid-column: span 2; }
   .tile .v { font-size: 27px; }
   h2 { font-size: 26px; }
   .block { padding-top: 40px; }
@@ -506,7 +518,8 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 .lcd[role="button"]:focus-visible { outline: 2px solid #9ec5f4; outline-offset: 3px; border-radius: 8px; }
 
 /* ---------- chart mark colours ---------- */
-.f-time, .f-t2 { fill: var(--time-2); background: var(--time-2); }
+.f-time { fill: var(--time); background: var(--time); }
+.f-t2 { fill: var(--time-2); background: var(--time-2); }
 .f-t1 { fill: var(--time-1); background: var(--time-1); }
 .f-t3 { fill: var(--time-3); background: var(--time-3); }
 .f-win { fill: var(--win); background: var(--win); }
@@ -517,4 +530,115 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 .ring { stroke: var(--surface); stroke-width: 2; }
 .ref { stroke: var(--ink-2); stroke-width: 1; }
 
+/* ---------- review round 1: layout, phones, compare, landing ---------- */
+
+/* the clock: unit letters printed small under each group of digits */
+.lg { position: relative; display: inline-block; }
+.lg b { font-weight: inherit; }
+.lg small {
+  position: absolute; right: 0.07em; top: 100%; margin-top: 3px;
+  font: 700 max(9px, 0.19em)/1 var(--font); letter-spacing: 0.03em; opacity: 0.72;
+}
+@media (min-width: 601px) { .dates .from-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } }
+
+/* compare: directly under the filter row */
+.compare { padding-top: 22px; }
+.compare h2 { font-size: 22px; }
+.compare .panel { margin-top: 10px; }
+.cmp-rows { grid-template-columns: max-content minmax(80px, 1fr) max-content; row-gap: 14px; }
+.row.cmp { align-items: center; }
+.row.cmp .rl { font-size: 15px; }
+.row.cmp .rl .link-btn[aria-pressed="true"] { text-decoration-thickness: 2px; font-weight: 750; }
+.row.cmp:not(.on) .rl .link-btn { font-weight: 550; }
+.cmp-vis { display: grid; gap: 5px; min-width: 0; }
+.cmp-vis.empty { color: var(--muted); font-size: 14px; }
+.cmp-strip { display: block; width: 100%; height: 26px; border-bottom: 1px solid var(--axis); }
+.cmp-more { margin-top: 12px; }
+.cmp-more summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ink-2); padding: 6px 0; width: max-content; }
+.cmp-more[open] summary { margin-bottom: 4px; }
+.add-note { font-size: 14px; color: var(--muted); }
+/* the comparison table has long headings: let them wrap instead of pushing columns off the panel */
+#compare th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
+#compare th.num { max-width: 118px; }
+/* narrow phones: the small second figure of a row drops under the first */
+@media (max-width: 380px) { .row .rv small { display: block; margin-left: 0; } }
+/* the rating-gap rows carry the longest second figure: on phones it sits under the first and may wrap */
+@media (max-width: 600px) { .row.wide .rv { white-space: normal; max-width: 104px; } .row.wide .rv small { display: block; margin-left: 0; } }
+
+/* calendar: weekday labels, and the busiest days beside it */
+.cal-panel { display: flex; flex-wrap: wrap; gap: 20px 48px; align-items: flex-start; }
+.cal-side { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.cal-top { flex: 1 1 320px; min-width: 0; }
+.cal-box { --c: 13px; display: flex; gap: 6px; }
+.cal-wrap { min-width: 0; }
+.cal-wd { display: grid; grid-template-rows: 18px repeat(7, var(--c)); gap: 3px; padding: 2px 0 4px; flex: none; }
+.cal-wd span { font-size: 11px; line-height: var(--c); color: var(--muted); white-space: nowrap; }
+.cal-top .rl .link-btn { font-weight: 550; }
+
+/* heatmap: weekday labels stay put while the hours scroll */
+.heat .dd, .heat > span:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+
+/* tables: the first column stays put while the rest scrolls sideways */
+.ledger th:first-child, .ledger td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+.ledger thead th:first-child { z-index: 3; }
+.ledger thead th { z-index: 2; }
+.ledger tfoot td { z-index: 2; }
+.ledger tfoot td:first-child { z-index: 3; }
+.ledger tbody tr[data-click]:hover td:first-child, .ledger tr[aria-current="true"] td:first-child { background: var(--surface-2); }
+
+/* the games of one day */
+.games .c-sub { display: none; }
+.games .c-open a { font-weight: 600; white-space: nowrap; }
+.games td.c-open, .games th.c-open { padding-right: 0; text-align: right; }
+
+/* landing: the seven verdicts, with their real art and thresholds */
+.intro { max-width: none; }
+.intro > h1, .intro > .lede { max-width: 760px; }
+.verdicts { margin-top: 48px; padding-top: 22px; border-top: 1px solid var(--line); }
+.verdicts h2 { font-size: 26px; }
+.lineup { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 18px 14px; margin: 22px 0 0; padding: 0; list-style: none; }
+.lineup li { display: grid; gap: 2px; align-content: start; font-size: 13px; color: var(--ink-2); line-height: 1.3; }
+.lineup-art { margin-bottom: 8px; }
+.lineup b { font-variation-settings: "wdth" 80; font-weight: 720; font-size: 15px; color: var(--ink); line-height: 1.15; text-wrap: balance; }
+
+@media (max-width: 900px) {
+  .lineup { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .lineup { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 10px; }
+  .verdicts { margin-top: 34px; }
+  .cal-panel { gap: 18px; }
+  .lcd { padding-bottom: calc(0.34em + 12px); }
+  .cal-top { flex-basis: 100%; }
+  .cmp-rows { column-gap: 8px; }
+  /* the day's games: result, opponent, rating change, length and the link; the rest moves to a second line */
+  .games .c-start, .games .c-game, .games .c-clock, .games .c-after, .games .c-wide { display: none; }
+  .games .c-sub { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .games td.c-opp { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .games td, .games th { padding-right: 8px; }
+  .games td.num, .games th.num { padding-right: 8px; }
+  .ledger th:first-child, .ledger td:first-child { box-shadow: 1px 0 0 var(--line); }
+  .ledger thead th:first-child { box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
+  .games th:first-child, .games td:first-child { box-shadow: none; }
+}
+
+/* touch: things people must hit get about 40px of height (item sizes on desktop stay as they are) */
+@media (max-width: 600px), (pointer: coarse) {
+  .seg button { padding: 9px 12px; min-height: 40px; }
+  .sticker { padding: 10px 13px; }
+  .stickers { gap: 12px; }
+  .chip button { padding: 10px 13px; }
+  .chip .x { padding: 10px 12px 10px 6px; }
+  .ghost-btn { min-height: 40px; }
+  .add-player input { min-height: 40px; }
+  .check { min-height: 40px; }
+  .check input { width: 20px; height: 20px; }
+  .ledger th button { padding: 12px 0; }
+  .ledger tbody td { padding-top: 11px; padding-bottom: 11px; }
+  .try .link-btn, .tile .n .link-btn, .cal-top .link-btn, .row.cmp .link-btn, .notice .link-btn, .foot .link-btn, .foot a { position: relative; }
+  .try .link-btn::after, .tile .n .link-btn::after, .cal-top .link-btn::after, .row.cmp .link-btn::after, .notice .link-btn::after, .foot .link-btn::after, .foot a::after { content: ""; position: absolute; inset: -11px -4px; }
+  .try { line-height: 2.2; }
+  .cmp-more summary { padding: 11px 0; }
+  .games .c-open a { display: inline-block; padding: 9px 0 9px 8px; }
+}
 

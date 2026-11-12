@@ -132,7 +132,7 @@ export const TIERS = [
   { key: 'resident', min: 7 * H, sample: 8.1 * H, label: 'The board is home now',
     line: '{t} a day. That is more than most people sleep on a work night. The pieces have started saving a seat.' },
   { key: 'fossil', min: 10 * H, sample: 11.5 * H, label: 'Legally a resident of chess.com',
-    line: '{t} a day. That is not a hobby, it is a shift and a half. The sun has started asking after {who}.' },
+    line: '{t} a day. There are airline pilots with shorter days and stricter rest rules. The sun has started asking after {who}.' },
 ];
 export function tierIndex(seconds) {
   let i = 0;
@@ -156,7 +156,7 @@ export function verdict(st, who, f, forced) {
       key: 'empty', art: ART.empty(),
       label: t.games ? 'Slow chess' : 'A clean record',
       line: t.games
-        ? `${f.plural(t.games, 'daily game')} and not a minute at the board. Chess by post. The patience is noted.`
+        ? `${f.plural(t.games, 'daily game')} and no clock running on any of them. Chess by post. The patience is noted.`
         : `Not one game in ${f.plural(r.days, 'day')}. Either the dates are off or somebody went outside.`,
       basis: '',
     };
@@ -171,7 +171,7 @@ export function verdict(st, who, f, forced) {
     line: tier.line.replace('{t}', f.dur(shown)).replace('{who}', who),
     basis: forced != null && forced !== natural
       ? `Preview of level ${i + 1} of ${TIERS.length}. The real average is ${f.dur(real)} on a day played, which is level ${natural + 1}.`
-      : `Going by the average on days with at least one live game: ${f.num(t.liveDays)} of ${f.num(r.days)}.`,
+      : t.liveDays === 1 ? 'Going by the one day with a live game.' : `Averaged over the ${f.num(t.liveDays)} days with a live game, out of ${f.num(r.days)}.`,
   };
   // The single heaviest day gets its own line when it sits in a higher bracket than the average.
   const top = st.records.busiestDay && st.days.find((d) => d.date === st.records.busiestDay);
@@ -182,21 +182,57 @@ export function verdict(st, who, f, forced) {
 }
 
 // ---------- one day ----------
-// At most one remark per day, heaviest reason first.
+// At most one remark per day, heaviest reason first. Each reason has a few variants; the date picks one,
+// so neighbouring days read differently and a day always says the same thing. No line here repeats a
+// sticker's note. Hours of the day are the viewer's clock, and the lines that use them say so.
+const dayNumber = (date) => { const [y, m, d] = date.split('-').map(Number); return Math.floor(Date.UTC(y, m - 1, d) / 864e5); };
 export function dayQuip(d, games, f) {
   if (!d.games) return null;
+  const pick = (...lines) => lines[dayNumber(d.date) % lines.length];
   const night = games.filter((g) => { const h = new Date(g.start).getHours(); return h >= 2 && h < 5; }).length;
-  if (d.time >= 10 * H) return `${f.dur(d.time)} in one day. Days only come with 24 of those.`;
-  if (d.time >= 7 * H) return `${f.dur(d.time)} of chess. Longer than a working day, with fewer breaks.`;
-  if (d.time >= 4 * H) return `${f.dur(d.time)}. That was not a quick game before bed.`;
-  if (d.bestLossStreak >= 8) return `${d.bestLossStreak} losses in a row, and the queue button still got pressed.`;
+  const t = f.dur(d.time), ls = d.bestLossStreak, ws = d.bestWinStreak, g = f.num(d.games);
+  if (d.time >= 10 * H) return pick(
+    `${t} in one day. Days only come with 24 of those.`,
+    `${t}. The board saw more of this day than the sun did.`,
+    `${t} of chess in a single day. That is most of the waking part.`);
+  if (d.time >= 7 * H) return pick(
+    `${t} of chess. Longer than a working day, with fewer breaks.`,
+    `${t}. An office would have sent everyone home by then.`,
+    `${t}. This day had a job, and the job was chess.`);
+  if (d.time >= 4 * H) return pick(
+    `${t}. That was not a quick game before bed.`,
+    `${t}. Somewhere a to-do list went untouched.`,
+    `${t} at the board. Lunch was probably eaten with one hand.`,
+    `${t}. A film and its sequel would have been shorter.`);
+  if (ls >= 8) return pick(
+    `${ls} losses in a row, and the queue button still got pressed.`,
+    `${ls} straight losses. The stopping point was passed several games ago.`,
+    `${ls} losses back to back. Persistence is a virtue, in moderation.`);
   if (d.games === 64) return '64 games. One for every square on the board.';
-  if (d.games >= 50) return `${f.num(d.games)} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / d.games))} minutes of being awake.`;
-  if (d.bestWinStreak >= 10) return `${d.bestWinStreak} wins in a row. Somewhere, ${d.bestWinStreak} opponents are blaming their mouse.`;
-  if (night >= 3) return `${night} of these started between 2 and 5 in the morning. Nothing good was ever decided at that hour.`;
-  if (d.eloNet <= -50) return `Down ${Math.abs(d.eloNet)} points by bedtime. Tomorrow has a job to do.`;
-  if (d.eloNet >= 50) return `Up ${d.eloNet} points in a day. The correct move is to stop. It will not be played.`;
-  if (d.games === 1 && d.losses === 1) return 'One game, one loss, and then the laptop was closed. Rare discipline.';
+  if (d.games >= 50) return pick(
+    `${g} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / d.games))} minutes of being awake.`,
+    `${g} games. The mouse has earned a day off.`,
+    `${g} games in one day. Plenty of people take a year over that many.`);
+  if (ws >= 10) return pick(
+    `${ws} wins in a row. Somewhere, ${ws} opponents are blaming their mouse.`,
+    `${ws} straight wins. The rating graph briefly looked like a wall.`,
+    `${ws} wins on the trot. Nobody stops on a day like that, and nobody did.`,
+    `${ws} in a row. The opponents would like a word with matchmaking.`);
+  if (night >= 3) return pick(
+    `${night} of these started between 2 and 5 in the morning, going by your clock.`,
+    `${night} games began after 2 a.m. on your clock. If that is the player’s clock too, sleep lost.`,
+    `${night} starts between 2 and 5 a.m. your time. Where the opponents live, it may have been lunch.`);
+  if (d.eloNet <= -50) return pick(
+    `Down ${Math.abs(d.eloNet)} points by bedtime. Tomorrow has a job to do.`,
+    `${Math.abs(d.eloNet)} points gone in a day. They took a good deal longer to collect.`,
+    `Minus ${Math.abs(d.eloNet)}. The rating will be back. Probably.`);
+  if (d.eloNet >= 50) return pick(
+    `Up ${d.eloNet} points in a day. The correct move is to stop. It will not be played.`,
+    `Plus ${d.eloNet}. Screenshot it before tomorrow happens.`,
+    `${d.eloNet} points up. Days like this are why the bad ones get forgiven.`);
+  if (d.games === 1 && d.losses === 1) return pick(
+    'One game, one loss, and then the laptop was closed. Rare discipline.',
+    'Played one, lost one, left. That is either wisdom or a very short temper.');
   return null;
 }
 
@@ -216,7 +252,8 @@ export function stickers(st, games, who, f) {
   if (t.activeDays === st.range.days && st.range.days >= 7) add('No days off', `Played on all ${f.num(st.range.days)} days of the range. The streak is safe. Other things may not be.`);
   let night = 0;
   for (const row of st.heatmap) for (const h of [2, 3, 4]) night += row[h].games;
-  if (night >= Math.max(5, t.games * 0.03)) add('Night shift', `${f.num(night)} games started between 2 and 5 in the morning. Nothing good was ever decided at that hour.`);
+  // Hours are the viewer's clock, not necessarily the player's: the note says so instead of guessing.
+  if (night >= Math.max(5, t.games * 0.03)) add('Night shift', `${f.num(night)} games started between 2 and 5 in the morning, going by your clock. If this is your own account, nothing good was ever decided at that hour. If not, it may have been their lunchtime.`);
   const L = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
   if (L && L.duration >= 3 * H) add('Marathon', `${f.dur(L.duration)} in one sitting, ${f.num(L.games)} games. Somebody’s legs went numb.`);
   const tl = st.tilt;
@@ -225,16 +262,17 @@ export function stickers(st, games, who, f) {
   if (ll >= 10) add('Free fall', `${ll} losses in a row. Game ${ll + 1} was a choice.`);
   if (lw >= 10) add('On a heater', `${lw} wins in a row. ${lw} people closed the tab annoyed.`);
   const c = st.clock;
-  if (c.timeoutWins >= 5 && c.timeoutWins / Math.max(1, t.wins) >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
-  if (c.timeoutLosses >= 5 && c.timeoutLosses / Math.max(1, t.losses) >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
+  if (c.timeoutWins >= 5 && t.wins >= 15 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
+  if (c.timeoutLosses >= 5 && t.losses >= 12 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
   const up = st.records.biggestUpset != null ? games[st.records.biggestUpset] : null;
-  if (up && up.oppRating - up.myRating >= 200) add('Giant killer', `Beat ${up.opponent}, rated ${up.oppRating - up.myRating} points higher. Frame that one.`);
+  if (up && t.games >= 5 && up.oppRating - up.myRating >= 200) add('Giant killer', `Beat ${up.opponent}, rated ${up.oppRating - up.myRating} points higher. Frame that one.`);
   const rival = st.opponents[0];
   if (rival && rival.games >= 10) add('Rematch', `${f.num(rival.games)} games against ${rival.username} alone. At this point, just exchange numbers.`);
   const bullet = st.byClass.find((x) => x.timeClass === 'bullet');
   if (bullet && t.games >= 30 && bullet.games / t.games >= 0.7) add('Bullet brain', `${f.pct(bullet.games / t.games)} of the games were bullet. Thinking is for people with time.`);
   const wk = st.byDow.slice(5).reduce((a, d) => a + d.time, 0);
-  if (st.range.days >= 14 && t.time > 0 && wk / t.time >= 0.6) add('Weekend warrior', `${f.pct(wk / t.time)} of the time was played on Saturdays and Sundays. Weekdays are for recovering.`);
+  // A habit needs a few days and a few games behind it: one Saturday game is not a pattern.
+  if (st.range.days >= 14 && t.liveDays >= 4 && t.liveGames >= 20 && wk / t.time >= 0.6) add('Weekend warrior', `${f.pct(wk / t.time)} of the time was played on Saturdays and Sundays. Weekdays are for recovering.`);
   if (t.games >= 64 && t.games % 64 === 0) add('Full board', `${f.num(t.games)} games: exactly ${t.games / 64} for every square on the board.`);
   return out.slice(0, 6);
 }
@@ -248,4 +286,10 @@ export function equivalents(seconds) {
   if (seconds >= 16 * H) out.push(`or ${x(33 * H)} read-throughs of War and Peace`);
   if (seconds >= 20 * H) out.push(`or ${x(40 * H)} working weeks`);
   return out;
+}
+
+// ---------- the seven verdicts, for the landing page ----------
+/** Every tier with its art and lower bound in seconds, lightest first. */
+export function lineup() {
+  return TIERS.map((t) => ({ key: t.key, label: t.label, from: t.min, art: t.key === 'resident' ? ART.resident('7:00') : ART[t.key]() }));
 }

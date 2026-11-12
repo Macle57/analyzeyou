@@ -203,15 +203,16 @@ export function dayChart(root, buckets, o) {
   // rating panel
   if (showElo) {
     const y0 = m.t + h1 + gap;
-    const up = niceMax(maxOf(buckets, (b) => b.eloGained, 1), 2);
-    const dn = niceMax(maxOf(buckets, (b) => b.eloLost, 1), 2);
-    const step = Math.max(up.step, dn.step);
-    const upMax = Math.ceil(up.max / step) * step, dnMax = Math.ceil(dn.max / step) * step;
+    // Each side is as tall as its own data needs (plus a little air); gridlines sit at round values inside
+    // that. Rounding both sides up to a shared step used to leave half the panel empty.
+    const upMax = Math.max(1, maxOf(buckets, (b) => b.eloGained, 0) * 1.08);
+    const dnMax = Math.max(1, maxOf(buckets, (b) => b.eloLost, 0) * 1.08);
+    const step = niceMax(upMax + dnMax, 4).step;
     const y2 = (v) => y0 + ((upMax - v) / (upMax + dnMax)) * h2;
     svg.append(S('text', { x: 0, y: y0 - 16, class: 'cap' }, 'Rating won and lost'));
-    for (let v = -dnMax; v <= upMax + 1e-9; v += step) {
+    for (let v = -Math.floor(dnMax / step) * step; v <= upMax + 1e-9; v += step) {
       svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y2(v), y2: y2(v), class: v ? 'grid' : 'base' }));
-      svg.append(S('text', { x: m.l - 8, y: y2(v) + 4, 'text-anchor': 'end', class: 'tick' }, (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v)));
+      svg.append(S('text', { x: m.l - 8, y: y2(v) + 4, 'text-anchor': 'end', class: 'tick' }, (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString()));
     }
     buckets.forEach((b, i) => {
       if (b.eloGained > 0) {
@@ -230,7 +231,7 @@ export function dayChart(root, buckets, o) {
 
   // x labels
   const yx = H - 6;
-  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (small ? 64 : 84))))) {
+  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (o.tickWidth || (small ? 64 : 84)))))) {
     const x = m.l + i * band + band / 2;
     const anchor = x < m.l + 24 ? 'start' : x > W - m.r - 24 ? 'end' : 'middle';
     svg.append(S('text', { x: anchor === 'start' ? m.l : anchor === 'end' ? W - m.r : x, y: yx, 'text-anchor': anchor, class: 'tick' }, o.tick(buckets[i])));
@@ -285,7 +286,7 @@ export function lineChart(root, pts, o) {
   root.replaceChildren();
   if (!pts.length) return;
   const W = Math.max(280, Math.floor(root.clientWidth));
-  const m = { l: 44, r: 56, t: 18, b: 24 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
+  const m = { l: 44, r: 56, t: 18, b: 26 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
   const iw = W - m.l - m.r;
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'line' });
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
@@ -300,11 +301,20 @@ export function lineChart(root, pts, o) {
     svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v === yLo ? 'base' : 'grid' }));
     svg.append(S('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, v));
   }
-  const nT = Math.max(2, Math.floor(iw / 110));
-  if (t1 > t0) for (let i = 0; i < nT; i++) {
-    const t = t0 + ((t1 - t0) * i) / (nT - 1);
-    svg.append(S('text', { x: x(t), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === nT - 1 ? 'end' : 'middle', class: 'tick' }, o.fmtX(t)));
-  } else svg.append(S('text', { x: x(t0), y: H - 6, 'text-anchor': 'middle', class: 'tick' }, o.fmtX(t0)));
+  // x labels. o.ticks are candidates in order ({ t, label }); a label is drawn where it sits, with a small
+  // mark on the axis, only if it does not run into the one before it, and never twice.
+  const seen = new Set();
+  let lastRight = -Infinity;
+  for (const k of o.ticks || []) {
+    if (seen.has(k.label)) continue;
+    const px = x(k.t), w = k.label.length * 6.3;
+    const anchor = px - w / 2 < m.l ? 'start' : px + w / 2 > m.l + iw + 20 ? 'end' : 'middle';
+    const left = anchor === 'start' ? px : anchor === 'end' ? px - w : px - w / 2;
+    if (left < lastRight + 12) continue;
+    lastRight = left + w; seen.add(k.label);
+    svg.append(S('line', { x1: px, x2: px, y1: m.t + h, y2: m.t + h + 4, class: 'base' }));
+    svg.append(S('text', { x: px, y: H - 5, 'text-anchor': anchor, class: 'tick' }, k.label));
+  }
 
   // The path is drawn from a thinned copy; the peak, last point and tooltips use every real point.
   const parts = [];
