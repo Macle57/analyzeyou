@@ -94,14 +94,15 @@
     </div>
   </section>
 
-  <div id="results" hidden>
+  <div id="results" tabindex="-1" hidden>
     <!-- One filter row scopes everything below it -->
     <div class="filters" id="filters">
       <div class="players" id="players" aria-label="Players"></div>
       <form class="add-player" id="addForm">
         <label class="sr-only" for="addUser">Add a player to compare</label>
-        <input id="addUser" type="text" spellcheck="false" autocapitalize="none" maxlength="25" placeholder="Compare with…">
+        <input id="addUser" type="text" spellcheck="false" autocapitalize="none" maxlength="25" placeholder="Compare with…" aria-describedby="addMsg">
         <button type="submit" class="ghost-btn">Add</button>
+        <span class="add-msg" id="addMsg" role="alert" hidden></span>
       </form>
       <span class="add-note" id="addNote" hidden>Up to four players</span>
       <div class="seg" id="tcSeg" role="group" aria-label="Time control"></div>
@@ -181,6 +182,7 @@
       <dl class="tiles tiles-4" id="streakTiles"></dl>
       <div class="panel">
         <h3 id="tapeTitle">Recent results</h3>
+        <p class="note" id="tapeSum"></p>
         <div class="tape" id="tape"></div>
         <div class="legend" id="tapeLegend"></div>
       </div>

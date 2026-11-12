@@ -257,13 +257,13 @@ export function stickers(st, games, who, f) {
   const L = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
   if (L && L.duration >= 3 * H) add('Marathon', `${f.dur(L.duration)} in one sitting, ${f.num(L.games)} games. Somebody’s legs went numb.`);
   const tl = st.tilt;
-  if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.afterLoss.games >= 10) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
+  if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.liveLosses >= 20) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
   const ll = st.streaks.longestLoss?.length || 0, lw = st.streaks.longestWin?.length || 0;
   if (ll >= 10) add('Free fall', `${ll} losses in a row. Game ${ll + 1} was a choice.`);
   if (lw >= 10) add('On a heater', `${lw} wins in a row. ${lw} people closed the tab annoyed.`);
   const c = st.clock;
-  if (c.timeoutWins >= 5 && t.wins >= 15 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
-  if (c.timeoutLosses >= 5 && t.losses >= 12 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
+  if (c.timeoutWins >= 5 && t.wins >= 20 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
+  if (c.timeoutLosses >= 5 && t.losses >= 20 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
   const up = st.records.biggestUpset != null ? games[st.records.biggestUpset] : null;
   if (up && t.games >= 5 && up.oppRating - up.myRating >= 200) add('Giant killer', `Beat ${up.opponent}, rated ${up.oppRating - up.myRating} points higher. Frame that one.`);
   const rival = st.opponents[0];

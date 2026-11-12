@@ -217,6 +217,7 @@ test('fetches only overlapping months plus a seed month, seeds rating deltas, fi
     country: 'NO', joined: 1600000000000,
   });
   assert.equal(res.firstArchive, '2026-06');
+  assert.equal(res.lastArchive, '2026-11', 'newest archive, even though it lies after the range');
   const months = log.filter((u) => /\/games\/\d{4}\/\d{2}$/.test(u)).map((u) => u.slice(-7)).sort();
   assert.ok(months.includes('2026/08'), 'seed month fetched');
   assert.ok(months.includes('2026/10'));
@@ -248,6 +249,7 @@ test('a stale 404 on the archive list is retried with a cache-busting query', as
   const res = await fetchPlayerGames('testuser', { fetch: mockApi(routes, log), now: NOW, cache: false });
   assert.equal(res.games.length, 1);
   assert.equal(res.firstArchive, '2026-10');
+  assert.equal(res.lastArchive, '2026-10');
 });
 
 test('player with no games in range is not an error', async () => {
@@ -255,6 +257,22 @@ test('player with no games in range is not an error', async () => {
   const res = await fetchPlayerGames('testuser', { from: new Date(2026, 0, 1), to: new Date(2026, 0, 31), fetch: mockApi(routes), now: NOW, cache: false });
   assert.deepEqual(res.games, []);
   assert.equal(res.firstArchive, null);
+  assert.equal(res.lastArchive, null);
+});
+
+test('a dormant player: no games in range, lastArchive names the newest month on record', async () => {
+  const log = [];
+  const routes = {
+    [API]: PROFILE,
+    // Unsorted on purpose: the newest month is found by sorting, not by position.
+    [`${API}/games/archives`]: { archives: ['2008/04', '2007/11', '2008/02'].map((m) => `${API}/games/${m}`) },
+  };
+  const res = await fetchPlayerGames('testuser', { from: new Date(2026, 9, 1), to: new Date(2026, 9, 31), fetch: mockApi(routes, log), now: NOW, cache: false });
+  assert.deepEqual(res.games, []);
+  assert.equal(res.firstArchive, '2007-11');
+  assert.equal(res.lastArchive, '2008-04');
+  // Only the profile, the archive list and the seed month (the newest before the range) are requested.
+  assert.deepEqual(log.filter((u) => /\/games\/\d{4}\/\d{2}$/.test(u)), [`${API}/games/2008/04`]);
 });
 
 test('persistent 429 -> rate_limited after retries', async () => {
