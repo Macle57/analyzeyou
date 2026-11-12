@@ -98,7 +98,7 @@ test('win/loss streaks, current streak and day streaks', () => {
   const dd = [1, 1, 2, 2, 3, 3, 3, 5, 5];
   const games = o.map((outcome, k) => G(at(dd[k], 10, k * 6), { outcome, duration: 120 }));
   const s = analyze(games, { from: new Date(2026, 9, 1), to: new Date(2026, 9, 5, 23, 59), now: at(20, 12).getTime() });
-  assert.deepEqual(s.streaks.longestWin, { length: 3, start: games[3].start, end: games[5].end, startIdx: 3, endIdx: 5 });
+  assert.deepEqual(s.streaks.longestWin, { length: 3, start: games[3].start, end: games[5].end, startIdx: 3, endIdx: 5, opponents: 1 });
   assert.equal(s.streaks.longestLoss.length, 2);
   assert.equal(s.streaks.longestLoss.startIdx, 7);
   assert.deepEqual(s.streaks.current, { type: 'loss', length: 2 });
@@ -328,4 +328,45 @@ test('durationHist: round widths, edges on whole multiples, open tail', () => {
   for (const b of h) assert.equal(b.from % width, 0);
   assert.equal(h.at(-1).to, null, 'the 25-minute game lands in the open tail');
   assert.equal(h.reduce((a, b) => a + b.count, 0), 301);
+});
+
+// ------------------------------------------------------------------ review round 3
+
+test('a session across midnight: sessions.perDay counts it on both days, so it is never under 1', () => {
+  // The bullet case: one session from 23:50 into the next day, and both days count as played.
+  const games = [
+    G(new Date(2026, 10, 1, 23, 50), { duration: 300 }),
+    G(new Date(2026, 10, 2, 0, 0), { duration: 300 }),
+  ];
+  const s = analyze(games, { from: new Date(2026, 10, 1), to: new Date(2026, 10, 2, 23, 59) });
+  assert.equal(s.sessions.count, 1);
+  assert.equal(s.totals.liveDays, 2);
+  assert.equal(s.sessions.perDay, 1, 'count / liveDays would say 0.5');
+  assert.equal(analyze([]).sessions.perDay, null);
+});
+
+test('the longest streaks count distinct opponents', () => {
+  const opp = ['a', 'B', 'b', 'c', 'a', 'x', 'y'];
+  const out = ['win', 'win', 'win', 'win', 'win', 'loss', 'loss'];
+  const games = opp.map((o, k) => G(at(3, 10, k * 6), { opponent: o, outcome: out[k], duration: 120 }));
+  const s = analyze(games, { from: new Date(2026, 9, 3), to: new Date(2026, 9, 3, 23, 59) });
+  assert.equal(s.streaks.longestWin.length, 5);
+  assert.equal(s.streaks.longestWin.opponents, 3, 'a, b (any case) and c');
+  assert.equal(s.streaks.longestLoss.opponents, 2);
+  assert.equal(analyze([]).streaks.longestWin.opponents, 0);
+});
+
+test('gaps mark the days of a month that failed to load as missing', () => {
+  // October 2026 (UTC) did not load. Local days that overlap it are missing, whatever the timezone.
+  const gap = [Date.UTC(2026, 9, 1), Date.UTC(2026, 10, 1)];
+  const s = analyze([G(new Date(2026, 10, 5, 12))], { from: new Date(2026, 8, 25), to: new Date(2026, 10, 6, 23, 59), gaps: [gap] });
+  const miss = s.days.filter((d) => d.missing).map((d) => d.date);
+  assert.ok(miss.includes('2026-10-02') && miss.includes('2026-10-30'), 'inner days of the month');
+  assert.ok(!miss.includes('2026-09-25') && !miss.includes('2026-11-05'), 'days well outside it');
+  for (const d of s.days) {
+    const start = new Date(...d.date.split('-').map((x, i) => (i === 1 ? x - 1 : +x))).getTime();
+    const next = new Date(new Date(start).getFullYear(), new Date(start).getMonth(), new Date(start).getDate() + 1).getTime();
+    assert.equal(d.missing, start < gap[1] && next > gap[0], d.date);
+  }
+  assert.ok(analyze([], { from: new Date(2026, 9, 1), to: new Date(2026, 9, 3) }).days.every((d) => d.missing === false));
 });

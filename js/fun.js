@@ -186,7 +186,7 @@ export function verdict(st, who, f, forced) {
 // are walked in date order and each takes the first line of its reason that is still unused. A reason
 // that has said everything it has passes the day on to its next matching reason, or to no remark at
 // all. No line here repeats a sticker's note. Hours of the day are the viewer's clock, and the lines
-// that use them say so.
+// that use them say so. A line that returns null is not true of that day and is skipped.
 const dayNumber = (date) => { const [y, m, d] = date.split('-').map(Number); return Math.floor(Date.UTC(y, m - 1, d) / 864e5); };
 const REASONS = [
   { key: 'h10', when: (c) => c.d.time >= 10 * H, lines: [
@@ -223,7 +223,7 @@ const REASONS = [
     (c) => `${c.g} games. The mouse has earned a day off.`,
     (c) => `${c.g} games in one day. Plenty of people take a year over that many.`,
     (c) => `${c.g} games. Each one was going to be the last.`,
-    (c) => `${c.g} games in a day. The opponents changed; the chair did not.`,
+    (c) => (c.opps > 1 ? `${c.g} games in a day. The opponents changed; the chair did not.` : null),
     (c) => `${c.g} games. A tournament plays nine rounds and calls it a week.`,
     (c) => `${c.g} in one day. The new-game button held up well.`,
   ] },
@@ -268,7 +268,8 @@ const REASONS = [
 ];
 function quipContext(d, games, f) {
   const night = games.filter((g) => { const h = new Date(g.start).getHours(); return h >= 2 && h < 5; }).length;
-  return { d, night, t: f.dur(d.time), ls: d.bestLossStreak, ws: d.bestWinStreak, g: f.num(d.games), pts: f.num(Math.abs(d.eloNet)) };
+  const opps = new Set(games.map((g, i) => String(g.opponent ?? `?${i}`).toLowerCase())).size;
+  return { d, night, opps, t: f.dur(d.time), ls: d.bestLossStreak, ws: d.bestWinStreak, g: f.num(d.games), pts: f.num(Math.abs(d.eloNet)) };
 }
 /**
  * The remarks for a whole range: Map of 'YYYY-MM-DD' -> line. `days` are the range's days in date order
@@ -282,11 +283,16 @@ export function planQuips(days, games, f) {
     for (const r of REASONS) {
       if (!r.when(c)) continue;
       const n = r.lines.length, start = dayNumber(d.date) % n;
-      let hit = -1;
-      for (let k = 0; k < n && hit < 0; k++) { const i = (start + k) % n; if (!used.has(`${r.key}:${i}`)) hit = i; }
+      let hit = -1, line = null;
+      for (let k = 0; k < n && hit < 0; k++) {
+        const i = (start + k) % n;
+        if (used.has(`${r.key}:${i}`)) continue;
+        line = r.lines[i](c);
+        if (line) hit = i;
+      }
       if (hit < 0) continue; // this reason has said all it has: the day goes to its next reason
       used.add(`${r.key}:${hit}`);
-      out.set(d.date, r.lines[hit](c));
+      out.set(d.date, line);
       break;
     }
   }
@@ -296,8 +302,12 @@ export function planQuips(days, games, f) {
 export function dayQuip(d, games, f) {
   if (!d.games) return null;
   const c = quipContext(d, games, f);
-  const r = REASONS.find((x) => x.when(c));
-  return r ? r.lines[dayNumber(d.date) % r.lines.length](c) : null;
+  for (const r of REASONS) {
+    if (!r.when(c)) continue;
+    const n = r.lines.length, start = dayNumber(d.date) % n;
+    for (let k = 0; k < n; k++) { const line = r.lines[(start + k) % n](c); if (line) return line; }
+  }
+  return null;
 }
 
 // ---------- stickers on the clock ----------
@@ -324,7 +334,9 @@ export function stickers(st, games, who, f) {
   if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.liveLosses >= 20) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
   const ll = st.streaks.longestLoss?.length || 0, lw = st.streaks.longestWin?.length || 0;
   if (ll >= 10) add('Free fall', `${ll} losses in a row. Game ${ll + 1} was a choice.`);
-  if (lw >= 10) add('On a heater', `${lw} wins in a row. ${lw} people closed the tab annoyed.`);
+  // The people are distinct opponents: a streak can beat the same player more than once.
+  const lwo = st.streaks.longestWin?.opponents || lw;
+  if (lw >= 10) add('On a heater', `${lw} wins in a row. ${lwo === 1 ? `1 person closed the tab annoyed, ${lw} times.` : `${lwo} people closed the tab annoyed.`}`);
   const c = st.clock;
   if (c.timeoutWins >= 5 && t.wins >= 20 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
   if (c.timeoutLosses >= 5 && t.losses >= 20 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);

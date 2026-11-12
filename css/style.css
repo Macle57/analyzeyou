@@ -357,6 +357,20 @@ svg:focus:not(:focus-visible) { outline: none; }
 /* too few games to read much into: greyed like the win-rate heatmap's thin slots */
 .row.few .wdl i { background: var(--line); }
 .row.few .rl, .row.few .rv { color: var(--muted); }
+/* the same in the openings and opponents tables */
+tr.few .wdl i { background: var(--line); }
+tr.few td { color: var(--muted); }
+tr.few td a { color: inherit; }
+.few-cue { font-size: inherit; }
+
+/* days of a month that failed to load: a hatch, never the blank of a day without games (designer refines) */
+.cal button.missing { background-image: repeating-linear-gradient(45deg, var(--axis) 0 1.5px, transparent 1.5px 4px); }
+.scale i.missing-key { background: var(--cell-0) repeating-linear-gradient(45deg, var(--axis) 0 1.5px, transparent 1.5px 4px); }
+.hatch-line { fill: var(--axis); }
+.missing-band { opacity: 0.55; }
+.missing-lab { fill: var(--muted); }
+.ledger tr.missing td { color: var(--muted); }
+.ledger td.missing-cell { background-image: repeating-linear-gradient(45deg, var(--line) 0 1.5px, transparent 1.5px 6px); }
 
 /* comparisons (after win / after loss, clock) */
 .pairs { display: grid; gap: 0; }
@@ -391,6 +405,8 @@ tr:last-child td { border-bottom: 0; }
 .table-wrap.tall { max-height: 540px; overflow: auto; }
 .ledger thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; box-shadow: 0 1px 0 var(--line); }
 .ledger th button { background: none; border: 0; padding: 0; font-weight: 600; color: inherit; }
+/* the whole header cell sorts: the button's hit area stretches over the (sticky, so positioned) cell */
+.ledger th > button::before { content: ""; position: absolute; inset: 0; }
 .ledger th button:hover { color: var(--ink); }
 .ledger th[aria-sort] button { color: var(--ink); }
 .ledger th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 9px; }

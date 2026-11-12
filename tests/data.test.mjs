@@ -483,3 +483,42 @@ test('isChessComUrl accepts only https links on chess.com', () => {
     assert.ok(!isChessComUrl(bad), String(bad));
   }
 });
+
+// ------------------------------------------------------------------ review round 3
+
+test('a dropped connection on one month is reported like a 503: the months that loaded are kept', async () => {
+  let octTries = 0;
+  const api = mockApi((url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/08', '2026/09', '2026/10');
+    if (url === `${API}/games/2026/08`) return { games: [rawGame('aug', '2026-08-20T10:00:00Z', 'blitz', 1400)] };
+    if (url === `${API}/games/2026/09`) return { games: [rawGame('sep', '2026-09-20T10:00:00Z', 'blitz', 1410)] };
+    return null;
+  });
+  const f = async (url, init) => {
+    if (url === `${API}/games/2026/10`) { octTries++; throw new TypeError('Failed to fetch'); }
+    return api(url, init);
+  };
+  const res = await fetchPlayerGames('testuser', { from: utc('2026-08-15T12:00:00Z'), to: utc('2026-10-05T12:00:00Z'), fetch: f, now: NOW, cache: false, retryBaseMs: 1 });
+  assert.equal(octTries, 3, 'retried before giving up');
+  assert.deepEqual(res.games.map((g) => g.id), ['aug', 'sep']);
+  assert.deepEqual(res.failedMonths, ['2026-10']);
+  assert.deepEqual(res.warnings, ["Couldn't load Oct 2026; numbers for that month are missing."]);
+});
+
+test('a dropped connection on every month of the range is an error, even when the seed month loaded', async () => {
+  const api = mockApi((url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/09', '2026/10', '2026/11');
+    if (url === `${API}/games/2026/09`) return { games: [rawGame('sep', '2026-09-20T10:00:00Z', 'blitz', 1400)] };
+    return null;
+  });
+  const f = async (url, init) => {
+    if (/games\/2026\/1[01]$/.test(url)) throw new TypeError('Failed to fetch');
+    return api(url, init);
+  };
+  await assert.rejects(
+    fetchPlayerGames('testuser', { from: utc('2026-10-14T12:00:00Z'), to: utc('2026-11-12T12:00:00Z'), fetch: f, now: NOW, cache: false, retryBaseMs: 1 }),
+    (e) => e.code === 'network',
+  );
+});
