@@ -77,7 +77,7 @@ export function analyze(games, opts = {}) {
   // ---------------------------------------------------------- single pass over games
   const totals = {
     games: N, liveGames: 0, wins: 0, losses: 0, draws: 0, time: 0, myThink: 0, oppThink: 0, thinkGames: 0,
-    avgGame: null, medianGame: null, activeDays: 0, avgPerActiveDay: null, avgPerDay: null, moves: 0,
+    avgGame: null, medianGame: null, activeDays: 0, liveDays: 0, avgPerActiveDay: null, avgPerDay: null, moves: 0,
   };
   const liveDur = [];
   const heatmap = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ ...wld(), time: 0, eloNet: 0 })));
@@ -239,11 +239,13 @@ export function analyze(games, opts = {}) {
       totals.activeDays++;
       byDow[day.dow].activeDays++;
     }
+    if (day.firstStart != null) totals.liveDays++; // firstStart is set by live games only
     byDow[day.dow].days++;
   }
   totals.avgGame = totals.liveGames ? totals.time / totals.liveGames : null;
   totals.medianGame = median(liveDur);
-  totals.avgPerActiveDay = totals.activeDays ? totals.time / totals.activeDays : null;
+  // Daily games carry no time, so a day with only daily games would dilute the average: divide by live days.
+  totals.avgPerActiveDay = totals.liveDays ? totals.time / totals.liveDays : null;
   totals.avgPerDay = days.length ? totals.time / days.length : null;
 
   // ---------------------------------------------------------- sessions and tilt
@@ -267,18 +269,20 @@ export function analyze(games, opts = {}) {
         cur.games++; cur.lastIdx = i;
         if (g.end > cur.end) cur.end = g.end;
       } else {
-        cur = { start: g.start, end: g.end, duration: 0, games: 1, wins: 0, losses: 0, draws: 0, eloNet: 0, firstIdx: i, lastIdx: i };
+        cur = { start: g.start, end: g.end, duration: 0, playTime: 0, games: 1, wins: 0, losses: 0, draws: 0, eloNet: 0, firstIdx: i, lastIdx: i, _day: null };
         sessionList.push(cur);
-        const di = dayIndex.get(gDay[i]);
-        if (di != null) days[di].sessions++;
       }
+      cur.playTime += g.duration;
+      // A day counts every session that has a game starting on it, including one that began the evening before.
+      const di = dayIndex.get(gDay[i]);
+      if (di != null && di !== cur._day) { days[di].sessions++; cur._day = di; }
       if (g.outcome === 'win') cur.wins++; else if (g.outcome === 'loss') cur.losses++; else cur.draws++;
       cur.eloNet += delta(g);
       const pb = posBuckets[Math.min(cur.games, 10) - 1];
       addResult(pb, g); pb.eloNet += delta(g);
       prev = i;
     }
-    for (const s of sessionList) s.duration = Math.max(0, Math.round((s.end - s.start) / 1000));
+    for (const s of sessionList) { s.duration = Math.max(0, Math.round((s.end - s.start) / 1000)); delete s._day; }
 
     // requeue: next live game (any session) starting within 5 minutes of this one's end
     let nextLive = -1;

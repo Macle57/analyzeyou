@@ -1,7 +1,7 @@
-import { fetchPlayerGames, clearCache } from './data.js';
+import { fetchPlayerGames, clearCache, isChessComUrl } from './data.js';
 import { analyze } from './analyze.js';
-import { dayChart, lineChart, colChart, showTip, hideTip, tipBox, setTip, timeTick } from './charts.js';
-import { verdict, dayQuip, stickers, equivalents, pawnMark, parseMood } from './fun.js';
+import { dayChart, lineChart, colChart, showTip, hideTip, tipBox, setTip, timeTick, maxOf } from './charts.js';
+import { verdict, dayQuip, stickers, equivalents, pawnMark, parseMood, lineup } from './fun.js';
 
 // ---------- tiny helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -37,7 +37,7 @@ const dfLong = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'sh
 const dfMed = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 const dfMonth = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
 const dfMonShort = new Intl.DateTimeFormat(undefined, { month: 'short' });
-const dfMonYr = new Intl.DateTimeFormat(undefined, { month: 'short', year: '2-digit' });
+const dfMonYear = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
 const dfTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dfHour = new Intl.DateTimeFormat(undefined, { hour: 'numeric' });
 const dfDow = new Intl.DateTimeFormat(undefined, { weekday: 'long' });
@@ -45,7 +45,14 @@ const dfDowShort = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
 const dowName = (dow, short) => (short ? dfDowShort : dfDow).format(new Date(2024, 0, 1 + dow)); // 2024-01-01 was a Monday
 const H12 = /[a-z]/i.test(dfHour.format(new Date(2024, 0, 1, 15)));
 const hourName = (h) => (H12 ? dfHour.format(new Date(2024, 0, 1, h)).replace(/\s/g, ' ').toLowerCase() : `${pad(h)}:00`);
-const num = (n) => Math.round(n).toLocaleString();
+const num = (n) => (Math.round(n) || 0).toLocaleString(); // `|| 0` turns -0 into 0, which would print "-0"
+// The one rule for short dates: when the range on screen touches more than one calendar year, every
+// date carries its year ("14 Mar" across nine years says nothing). Set once per render.
+let multiYear = false;
+/** A short date: "14 Oct", or "14 Oct 2025" on a range that spans years. Takes 'YYYY-MM-DD' or a timestamp. */
+const sd = (x) => (multiYear ? dfMed : dfShort).format(typeof x === 'string' ? parseYmd(x) : new Date(x));
+/** Two short dates as a span, or one date when both ends are the same day. */
+const sdSpan = (a, b) => (ymd(new Date(typeof a === 'string' ? parseYmd(a) : a)) === ymd(new Date(typeof b === 'string' ? parseYmd(b) : b)) ? sd(a) : `${sd(a)} to ${sd(b)}`);
 
 function dur(s) {
   if (s == null || !isFinite(s)) return '–';
@@ -78,12 +85,60 @@ function clockText(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   return h >= 1000 ? `${h}:${pad(m)}` : `${h}:${pad(m)}:${pad(r)}`;
 }
+// The digits on a face in groups, each with its unit printed small under it, so 1,062 hours can never
+// be read as minutes and seconds. `long` (1,000 hours or more) drops the seconds to fit the glass.
+function clockParts(s, long) {
+  s = Math.max(0, Math.round(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return long ? [[String(h), 'h'], [pad(m), 'm']] : [[String(h), 'h'], [pad(m), 'm'], [pad(r), 's']];
+}
+function paintLcd(node, s, long) {
+  const parts = clockParts(s, long);
+  if (node.childElementCount !== parts.length) {
+    node.replaceChildren(...parts.flatMap(([, u], i) => [i ? ':' : null, el('span', { class: 'lg' }, el('b'), el('small', { text: u }))]).filter(Boolean));
+  }
+  [...node.children].forEach((g, i) => { g.firstChild.textContent = parts[i][0]; });
+}
 const signed = (n) => (n > 0 ? '+' : n < 0 ? MINUS : '') + num(Math.abs(n));
 const pct = (x, d = 0) => (x == null || !isFinite(x) ? '–' : (x * 100).toFixed(d) + '%');
 const rate = (o) => (o && o.games ? o.wins / o.games : null);
-const wdl = (o) => `${o.wins}–${o.draws}–${o.losses}`;
+const wdl = (o) => `${num(o.wins)}–${num(o.draws)}–${num(o.losses)}`;
 const dateStr = (s, f = dfMed) => f.format(parseYmd(s));
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`;
+// Rating won and lost in running text: a zero is a dash, never "+0" or "−0".
+const gain = (n) => (n ? `+${num(n)}` : '–');
+const loss = (n) => (n ? `${MINUS}${num(n)}` : '–');
+/** "Aug 30 to Sep 2", or one date when both ends are the same day. `a`, `b` are 'YYYY-MM-DD'. */
+const dateSpan = (a, b, f = dfMed) => (a === b ? dateStr(a, f) : `${dateStr(a, f)} to ${dateStr(b, f)}`);
+
+// Replaces a region's children and, if the focus was inside it, puts the focus back on the control
+// that matches it in the new content (same data-fk), so re-rendering never drops the focus to <body>.
+function swap(root, ...kids) {
+  const a = document.activeElement, fk = a && a !== root && root.contains(a) ? a.dataset.fk : null;
+  root.replaceChildren(...kids);
+  if (fk != null) root.querySelector(`[data-fk="${CSS.escape(fk)}"]`)?.focus({ preventScroll: true });
+}
+// One tab stop for a grid of marks: arrow keys move between `cells`, `step(i, key)` gives the next index.
+function rove(root, cells, active, step, onActive) {
+  cells.forEach((c, i) => { c.tabIndex = i === active ? 0 : -1; });
+  const first = !root.rove;
+  root.rove = { cells, step, onActive }; // the listeners below are added once and read the latest cells
+  if (!first) return;
+  root.addEventListener('focusin', (ev) => {
+    const { cells, onActive } = root.rove, i = cells.indexOf(ev.target);
+    if (i < 0) return;
+    cells.forEach((c, j) => { c.tabIndex = j === i ? 0 : -1; });
+    onActive(i);
+  });
+  root.addEventListener('keydown', (ev) => {
+    const { cells, step } = root.rove, i = cells.indexOf(ev.target);
+    if (i < 0 || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    const j = step(i, ev.key);
+    if (j == null) return;
+    ev.preventDefault();
+    cells[Math.max(0, Math.min(cells.length - 1, j))].focus();
+  });
+}
 
 const CLASS_LABEL = { bullet: 'Bullet', blitz: 'Blitz', rapid: 'Rapid', daily: 'Daily' };
 const CLASSES = [
@@ -118,6 +173,7 @@ const S = {
 const store = new Map(); // lowercased username -> { state, player, games, stats, error }
 let ctrl = null;
 let runId = 0;
+const DEFAULT_TITLE = document.title;
 // ?mood=0..6 forces a verdict level, so each one can be seen without finding a player who fits.
 const MOOD = parseMood(new URLSearchParams(location.search).get('mood'));
 
@@ -131,27 +187,35 @@ function applyPreset(p) {
   S.from = p === 'all' ? '' : ymd(addDays(t, -(Number(p) - 1)));
 }
 
+// The form accepts "@name" and spaces around it; links get the same treatment.
+const cleanName = (s) => String(s || '').trim().replace(/^@/, '').trim();
+// Days after today cannot hold games: a date in the future means today.
+const notAfterToday = (s) => { const t = ymd(today()); return s && s > t ? t : s; };
+
 function readUrl() {
   const q = new URLSearchParams(location.search);
-  const u = (q.get('u') || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  const u = (q.get('u') || '').split(',').map(cleanName).filter(Boolean).slice(0, 4);
   S.users = [...new Map(u.map((x) => [key(x), x])).values()];
-  const from = q.get('from'), to = q.get('to'), range = q.get('range');
+  const range = q.get('range');
   const okDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(parseYmd(s));
-  if (okDate(to) && (okDate(from) || from === '')) { S.preset = null; S.from = from; S.to = to; }
-  else if (okDate(from) && okDate(to)) { S.preset = null; S.from = from; S.to = to; }
+  const from = okDate(q.get('from')) ? notAfterToday(q.get('from')) : q.get('from'), to = okDate(q.get('to')) ? notAfterToday(q.get('to')) : null;
+  if (to && (okDate(from) || from === '') && !(from && from > to)) { S.preset = null; S.from = from; S.to = to; }
   else applyPreset(['7', '30', '90', '365', 'all'].includes(range) ? range : '30');
   if (['bullet', 'blitz', 'rapid', 'daily'].includes(q.get('tc'))) S.tc = q.get('tc');
   S.rated = q.get('rated') === '1';
+  S.pool = /^[a-z0-9]+:[a-z]+$/.test(q.get('pool') || '') ? q.get('pool') : null;
   const f = S.users.findIndex((x) => key(x) === key(q.get('focus') || ''));
   S.focus = f >= 0 ? f : 0;
 }
-function writeUrl() {
+// `st` defaults to the page state; a lookup that failed for a reason a reload can fix passes the attempted state.
+function writeUrl(st = S) {
   const q = new URLSearchParams();
-  if (S.users.length) q.set('u', S.users.join(','));
-  if (S.preset) q.set('range', S.preset); else { q.set('from', S.from); q.set('to', S.to); }
+  if (st.users.length) q.set('u', st.users.join(','));
+  if (st.preset) q.set('range', st.preset); else { q.set('from', st.from); q.set('to', st.to); }
   if (S.tc !== 'all') q.set('tc', S.tc);
   if (S.rated) q.set('rated', '1');
-  if (S.focus > 0 && S.users[S.focus]) q.set('focus', S.users[S.focus]);
+  if (S.pool) q.set('pool', S.pool);
+  if (st.focus > 0 && st.users[st.focus]) q.set('focus', st.users[st.focus]);
   if (MOOD != null) q.set('mood', String(MOOD));
   const s = q.toString();
   history.replaceState(null, '', s ? `?${s.replace(/%2C/g, ',')}` : location.pathname);
@@ -172,8 +236,8 @@ function setStatus(text, frac) {
 }
 
 function seg(root, options, value, onPick) {
-  root.replaceChildren(...options.map((o) => el('button', {
-    type: 'button', text: o.label, 'aria-pressed': String(o.value === value), disabled: o.disabled,
+  swap(root, ...options.map((o) => el('button', {
+    type: 'button', text: o.label, 'aria-pressed': String(o.value === value), disabled: o.disabled, 'data-fk': String(o.value),
     onclick: () => onPick(o.value),
   })));
 }
@@ -189,23 +253,31 @@ function compute(e) {
   e.stats = analyze(games, { from, to });
 }
 
-// The last state that loaded completely. A failed lookup goes back to it instead of leaving the page half-switched.
+// The last state that loaded completely: the settings and the store entries that belong to them.
+// A run may render the focus player early, so the store changes before the run commits; a failed or
+// stopped run puts both the settings and the entries back, never one without the other.
 let lastGood = null;
-const snapshot = () => ({ users: S.users.slice(), focus: S.focus, preset: S.preset, from: S.from, to: S.to });
-function settle() {
-  for (const [k, e] of store) if (e.state !== 'ok') { if (e.stats) store.set(k, { ...e, state: 'ok', error: null }); else store.delete(k); }
+const snapshot = () => ({ users: S.users.slice(), focus: S.focus, preset: S.preset, from: S.from, to: S.to, entries: new Map(store) });
+// Keeps lastGood's focus on the same player when the focus changes while it is current.
+function rememberFocus() {
+  if (!lastGood) return;
+  const j = lastGood.users.findIndex((x) => key(x) === key(S.users[S.focus] || ''));
+  if (j >= 0) lastGood.focus = j;
 }
 function restore() {
-  settle();
-  if (lastGood) Object.assign(S, { ...lastGood, users: lastGood.users.slice() });
-  else S.users = [];
+  store.clear();
+  if (lastGood) {
+    for (const [k, e] of lastGood.entries) store.set(k, e);
+    Object.assign(S, { users: lastGood.users.slice(), focus: lastGood.focus, preset: lastGood.preset, from: lastGood.from, to: lastGood.to });
+  } else S.users = [];
+  const focusName = S.users[S.focus];
   S.users = S.users.filter((u) => store.get(key(u))?.state === 'ok');
-  if (S.focus >= S.users.length) S.focus = 0;
+  S.focus = Math.max(0, S.users.indexOf(focusName));
   for (const e of store.values()) if (e.state === 'ok') compute(e);
   setStatus(null);
   document.querySelectorAll('.is-stale').forEach((n) => n.classList.remove('is-stale'));
   writeUrl(); syncControls(true);
-  if (S.users.length) render(); else renderPlayers();
+  if (S.users.length) render(); else { renderPlayers(); document.title = DEFAULT_TITLE; }
 }
 
 async function run() {
@@ -222,6 +294,7 @@ async function run() {
   document.querySelectorAll('#results .summary, #results .block').forEach((n) => n.classList.add('is-stale'));
   const { from, to } = rangeDates();
   const focusName = S.users[S.focus];
+  const attempt = { users: S.users.slice(), focus: S.focus, preset: S.preset, from: S.from, to: S.to };
   const order = [focusName, ...S.users.filter((u) => u !== focusName)];
   let done = 0, problem = null;
   for (const u of order) {
@@ -243,7 +316,14 @@ async function run() {
       if (!err?.code) console.error(err);
       const message = err?.code && err.message ? err.message : 'Something went wrong while loading the games. Try again.';
       problem ||= message;
-      if (isFocus) { restore(); showMsg(message); return; }
+      // Fatal: end this run before restoring, so nothing still in flight can report progress afterwards.
+      if (isFocus) {
+        ctrl?.abort(); runId++; restore(); showMsg(message);
+        // A name that does not exist stays out of the link; a lookup that a reload can fix (rate limit,
+        // network) keeps it, so reloading the page tries again.
+        if (err?.code === 'rate_limited' || err?.code === 'network') writeUrl(attempt);
+        return;
+      }
       // A compare player that fails is dropped; the rest of the page stays.
       store.delete(key(u));
       S.users = S.users.filter((x) => x !== u);
@@ -281,8 +361,15 @@ function render() {
   showMsg('');
   $('intro').hidden = true;
   $('results').hidden = false;
+  // Data-quality warnings (months that failed, daily games beyond the range) stay up while this player is shown.
+  const notes = e.warnings || [];
+  // Months that failed to load are not cached, so running the lookup again retries just those.
+  swap($('notice'), notes.join(' '), ...(e.failedMonths?.length ? [' ', el('button', { type: 'button', class: 'link-btn', text: 'Try again', 'data-fk': 'retry', onclick: () => run() })] : []));
+  $('notice').hidden = !notes.length;
   document.querySelectorAll('#results .summary, #results .block').forEach((n) => n.classList.remove('is-stale'));
   const st = e.stats, who = e.player?.username || S.users[S.focus];
+  multiYear = st.range.from.slice(0, 4) !== st.range.to.slice(0, 4);
+  document.title = `${who}: analyzeyou`;
   const has = st.totals.games > 0;
   for (const id of ['secInsights', 'secDays', 'secElo', 'secStreaks', 'secWhen', 'secSessions', 'secGames', 'secLedger']) $(id).hidden = !has;
 
@@ -305,26 +392,36 @@ function render() {
 }
 
 function renderPlayers() {
-  $('players').replaceChildren(...S.users.map((u, i) => {
+  swap($('players'), ...S.users.map((u, i) => {
     const e = store.get(key(u));
     return el('span', { class: 'chip', 'data-on': String(i === S.focus), 'data-state': e?.state || '' , title: e?.state === 'error' ? e.error : null },
-      el('button', { type: 'button', text: u, 'aria-pressed': String(i === S.focus), onclick: () => { S.focus = i; S.sel = null; S.pool = null; if (lastGood) lastGood.focus = i; writeUrl(); render(); } }),
+      el('button', { type: 'button', text: u, 'data-fk': `p:${key(u)}`, 'aria-pressed': String(i === S.focus), onclick: () => { S.focus = i; S.sel = null; S.pool = null; rememberFocus(); writeUrl(); render(); } }),
       S.users.length > 1 && el('button', { type: 'button', class: 'x', text: '×', 'aria-label': `Remove ${u}`, onclick: () => removeUser(i) }),
     );
   }));
   $('addForm').hidden = S.users.length >= 4;
+  $('addNote').hidden = S.users.length < 4;
 }
 function removeUser(i) {
-  S.users.splice(i, 1);
+  const [gone] = S.users.splice(i, 1);
   if (S.focus >= S.users.length) S.focus = S.users.length - 1; else if (i < S.focus) S.focus--; else if (i === S.focus) S.focus = 0;
   S.sel = null; S.pool = null;
   $('user').value = S.users[0] || '';
-  if (lastGood) lastGood = snapshot();
+  // Drop the player from the last good state too, but keep its dates and entries: during a run, S holds
+  // the new run's dates, which the old entries do not match.
+  if (lastGood) {
+    const focusName = lastGood.users[lastGood.focus];
+    lastGood.users = lastGood.users.filter((x) => key(x) !== key(gone));
+    lastGood.focus = Math.max(0, lastGood.users.indexOf(focusName));
+    rememberFocus();
+  }
   writeUrl(); render();
+  // The remove button is gone with its chip: put the focus on the chip of the player now shown.
+  if (document.activeElement === document.body) $('players').querySelector('[aria-pressed="true"]')?.focus();
 }
 
 // The clock faces: thinking time on each side of the board.
-let clockAnim = 0;
+let clockAnim = 0, clockShown = '';
 function renderClock(e, who) {
   const t = e.stats.totals, me = t.myThink || 0, opp = t.oppThink || 0;
   $('faceMeName').textContent = who;
@@ -340,14 +437,19 @@ function renderClock(e, who) {
   $('flagMe').textContent = $('flagOpp').textContent = even ? 'dead even' : 'thought longer';
   document.querySelector('.clock').dataset.lean = !has || even ? '' : me > opp ? 'me' : 'opp';
   renderStickers(e, who);
-  const ghost = Math.max(me, opp) >= 3600000 ? '8888:88' : '888:88:88';
+  const long = Math.max(me, opp) >= 3600000; // 1,000 hours: hours and minutes only
+  const ghost = long ? '8888:88' : '888:88:88';
   document.querySelectorAll('.lcd-ghost').forEach((g) => { g.textContent = ghost; });
   $('clockSr').textContent = has ? `${who} thought for ${durWords(me)}; opponents for ${durWords(opp)}.` : '';
+  // Count up only when the figures on the faces change; a re-render with the same totals leaves them alone.
+  const shown = `${clockText(me)}|${clockText(opp)}`;
+  if (shown === clockShown) return;
+  clockShown = shown;
   const id = ++clockAnim, t0 = performance.now(), D = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 900;
   const frame = (now) => {
     if (id !== clockAnim) return;
     const k = D ? Math.min(1, (now - t0) / D) : 1, ease = 1 - Math.pow(1 - k, 3);
-    $('lcdMe').textContent = clockText(me * ease); $('lcdOpp').textContent = clockText(opp * ease);
+    paintLcd($('lcdMe'), me * ease, long); paintLcd($('lcdOpp'), opp * ease, long);
     if (k < 1) requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
@@ -367,13 +469,13 @@ for (const side of ['Me', 'Opp']) {
   box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); cycleFace(side); } });
 }
 
-const FMT = { dur, pct, num, plural, date: (d) => dateStr(d, dfShort) };
+const FMT = { dur, pct, num, plural, date: (d) => sd(d) };
 // Stickers on the clock casing: small true facts about this player, each revealed by pressing it.
 function renderStickers(e, who) {
   const list = stickers(e.stats, e.view, who, FMT), row = $('stickers'), note = $('stickerNote');
   row.hidden = !list.length; note.hidden = true; note.replaceChildren();
   row.replaceChildren(...list.map((s) => {
-    const b = el('button', { type: 'button', class: 'sticker', text: s.label, title: s.note, 'aria-expanded': 'false' });
+    const b = el('button', { type: 'button', class: 'sticker', text: s.label, 'aria-expanded': 'false' });
     b.addEventListener('click', () => {
       const open = b.getAttribute('aria-expanded') === 'true';
       for (const x of row.children) x.setAttribute('aria-expanded', 'false');
@@ -382,6 +484,12 @@ function renderStickers(e, who) {
     });
     return b;
   }));
+}
+function closeSticker() {
+  const note = $('stickerNote');
+  if (note.hidden) return;
+  note.hidden = true;
+  for (const x of $('stickers').children) x.setAttribute('aria-expanded', 'false');
 }
 function renderVerdict(e, who) {
   const v = verdict(e.stats, who, FMT, MOOD), box = $('verdict');
@@ -397,52 +505,100 @@ function tile(label, value, note) {
   return el('div', { class: 'tile' }, el('dt', { text: label }), el('dd', { class: 'v' }, value), el('dd', { class: 'n' }, note || ' '));
 }
 function dayLink(date, f = dfMed) {
-  return el('button', { type: 'button', class: 'link-btn', text: dateStr(date, f), onclick: () => select('day', date, true) });
+  const b = el('button', { type: 'button', class: 'link-btn', text: dateStr(date, f), onclick: (ev) => select('day', date, { scroll: true, kb: ev.detail === 0, from: b }) });
+  return b;
 }
+
+// Tiles size their grid from how many there are (data-n), so a short row never leaves grey gaps.
+function setTiles(root, tiles) { root.dataset.n = String(tiles.length); root.replaceChildren(...tiles); }
+// A session runs on the wall clock, breaks included, so its length can exceed the playing time inside it.
+const sessionPlay = (x) => (x.duration - x.playTime >= 60 ? `, ${dur(x.playTime)} of it at the board` : '');
+// "+34 won, −8 lost", with words where a side is zero.
+const ratingNote = (g, l) => (g || l ? `${g ? `+${num(g)} won` : 'nothing won'}, ${l ? `${MINUS}${num(l)} lost` : 'nothing lost'}` : 'no change');
 
 function renderSummary(e, who) {
   const st = e.stats, t = st.totals, r = st.range;
-  const rangeText = `${dateStr(r.from)} to ${dateStr(r.to)}`;
+  const rangeText = dateSpan(r.from, r.to);
+  const filtered = S.tc !== 'all' || S.rated;
   renderVerdict(e, who);
   if (!t.games) {
     $('headline').textContent = `No games for ${who} in this range`;
-    $('subline').textContent = `Nothing was played between ${dateStr(r.from)} and ${dateStr(r.to)}${S.tc !== 'all' || S.rated ? ' with these filters' : ''}. Try a longer range${S.tc !== 'all' || S.rated ? ' or clear the filters' : ''}.`;
+    const span = r.from === r.to ? `on ${dateStr(r.from)}` : `between ${dateStr(r.from)} and ${dateStr(r.to)}`;
+    // Only suggest what could turn up games: fewer filters, or more days.
+    $('subline').textContent = `Nothing was played ${span}${filtered ? ' with these filters' : ''}. ${filtered ? 'Clear the filters, or pick more days.' : r.days === 1 ? 'Pick more than one day.' : 'Pick a longer range.'}`;
     $('tiles').replaceChildren();
     $('tiles').hidden = true;
     return;
   }
   $('tiles').hidden = false;
-  $('headline').textContent = `${who} spent ${durWords(t.time)} playing chess`;
+  const rated = st.elo.ratedGames > 0;
+  const ratingTile = () => tile('Rating', el('span', { class: st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : '', text: signed(st.elo.net) }), ratingNote(st.elo.gained, st.elo.lost));
+  if (!hasTime(st)) {
+    // Daily games only: no clock runs, so the page counts games instead of time.
+    $('headline').textContent = `${who} played ${plural(t.games, 'daily game')} and no live chess`;
+    $('subline').textContent = `${rangeText}. A daily game runs for days with no clock ticking, so there is no time at the board to add up.`;
+    setTiles($('tiles'), [
+      tile('Games', num(t.games), `${pct(rate(t))} won`),
+      tile('Days with a game', num(t.activeDays), `of ${plural(r.days, 'day')}`),
+      ...(rated ? [ratingTile()] : []),
+    ]);
+    return;
+  }
   const waking = t.time / (r.days * 16 * 3600);
-  const dailyOnly = t.liveGames === 0;
-  $('subline').textContent = dailyOnly
-    ? `${plural(t.games, 'daily game')} between ${dateStr(r.from)} and ${dateStr(r.to)}. Daily games run over days, so they have no time at the board to count.`
-    : `${plural(t.games, 'game')} on ${t.activeDays} of ${plural(r.days, 'day')}, ${rangeText}. That is ${dur(t.avgPerDay)} for every day in the range, or ${pct(waking, waking < 0.1 ? 1 : 0)} of the waking hours.`;
+  $('headline').textContent = `${who} spent ${durWords(t.time)} playing chess`;
+  const share = waking < 0.001 ? 'under 0.1%' : pct(waking, waking < 0.1 ? 1 : 0);
+  $('subline').textContent = r.days === 1
+    ? `${plural(t.games, 'game')} on ${rangeText}. That is ${share} of that day’s waking hours.`
+    : `${plural(t.games, 'game')} on ${num(t.activeDays)} of ${plural(r.days, 'day')}, ${rangeText}. That is ${dur(t.avgPerDay)} for every day in the range, or ${share} of the waking hours.`;
   const rec = st.records, day = (d) => st.days.find((x) => x.date === d);
   const longest = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
-  const b = rec.busiestDay && day(rec.busiestDay), b30 = rec.busiestDayLast30 && day(rec.busiestDayLast30);
-  $('tiles').replaceChildren(
+  const b = rec.busiestDay && day(rec.busiestDay), b30 = rec.busiestDayLast30 && day(rec.busiestDayLast30), mg = rec.mostGamesDay && day(rec.mostGamesDay);
+  const sessionTile = tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? [dayLink(ymd(new Date(longest.start))), `, ${plural(longest.games, 'game')}${sessionPlay(longest)}`] : null);
+  // A median of one or two games says nothing the average does not.
+  const avgTile = tile('Average game', durNode(t.avgGame), t.liveGames >= 3 ? `half are under ${dur(t.medianGame)}` : null);
+  if (t.liveDays <= 1) {
+    // One day of play: "busiest day" and "per day played" would all repeat the total.
+    setTiles($('tiles'), [
+      tile('Total time', durNode(t.time), b ? ['all on ', dayLink(b.date)] : null),
+      tile('Games', num(t.games), `${wdl(t)} won, drawn, lost`),
+      avgTile, sessionTile,
+      ...(rated ? [ratingTile()] : []),
+    ]);
+    return;
+  }
+  // "Busiest in the last 30 days" earns a tile when it is a different day from the range's busiest;
+  // when it is the same day the busiest-day tile says so, and the slot goes to something new.
+  const same30 = b && b30 && b30.date === b.date;
+  const third = b30 && !same30
+    ? tile('Busiest in the last 30 days', durNode(b30.time), [dayLink(b30.date), `, ${plural(b30.games, 'game')}`])
+    : mg && b && mg.date !== b.date
+      ? tile('Most games in a day', num(mg.games), [dayLink(mg.date), `, ${dur(mg.time)}`])
+      : tile('Days played', num(t.liveDays), `of ${plural(r.days, 'day')}`);
+  setTiles($('tiles'), [
     tile('Total time', durNode(t.time), `${plural(t.games, 'game')}, ${pct(rate(t))} won`),
-    tile('Busiest day', b ? durNode(b.time) : '–', b ? [dayLink(b.date), `, ${plural(b.games, 'game')}`] : null),
-    tile('Busiest in the last 30 days', b30 ? durNode(b30.time) : '–', b30 ? [dayLink(b30.date), `, ${plural(b30.games, 'game')}`] : 'no games in the last 30 days'),
-    tile('Average game', durNode(t.avgGame), `half are under ${dur(t.medianGame)}`),
-    tile('Per day played', durNode(t.avgPerActiveDay), `${(t.games / Math.max(1, t.activeDays)).toFixed(1)} games a day`),
-    tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? [dayLink(ymd(new Date(longest.start))), `, ${plural(longest.games, 'game')}`] : null),
-  );
+    tile('Busiest day', b ? durNode(b.time) : '–', b ? [dayLink(b.date), `, ${plural(b.games, 'game')}${same30 ? ', and the busiest of the last 30 days' : ''}`] : null),
+    third, avgTile,
+    // Both figures are over days with a live game: days with only daily games add no time.
+    tile('Per day played', durNode(t.avgPerActiveDay), `${(t.liveGames / Math.max(1, t.liveDays)).toFixed(1)} games a day`),
+    sessionTile,
+  ]);
 }
+/** Whether anything in the selection has time at the board (false with daily games only). */
+const hasTime = (st) => st.totals.liveGames > 0 && st.totals.time > 0;
 
 // ---------- insights ----------
 function renderInsights(e, who) {
   const st = e.stats, t = st.totals, out = [];
   const minN = Math.max(8, Math.round(t.games * 0.03));
   const hours = st.byHour.filter((h) => h.games >= minN);
-  if (t.time > 0) {
+  if (t.time > 0 && t.liveGames >= 10) {
     const peak = st.byHour.reduce((a, b) => (b.time > a.time ? b : a));
-    out.push(`The heaviest hour is **${hourName(peak.hour)}**: ${dur(peak.time)} of the total, ${pct(peak.time / t.time)} of all playing time.`);
+    // Hours are the viewer's clock; the lines that use them say so.
+    out.push(`Most of the playing lands around **${hourName(peak.hour)} your time**: ${dur(peak.time)}, ${pct(peak.time / t.time)} of the total.`);
   }
   if (hours.length >= 2) {
     const best = hours.reduce((a, b) => (rate(b) > rate(a) ? b : a)), worst = hours.reduce((a, b) => (rate(b) < rate(a) ? b : a));
-    if (rate(best) - rate(worst) >= 0.08) out.push(`Sharpest around **${hourName(best.hour)}** (${pct(rate(best))} won in ${best.games} games), weakest around **${hourName(worst.hour)}** (${pct(rate(worst))} in ${worst.games}).`);
+    if (rate(best) - rate(worst) >= 0.08) out.push(`Sharpest around **${hourName(best.hour)}** on your clock (${pct(rate(best))} won in ${num(best.games)} games), weakest around **${hourName(worst.hour)}** (${pct(rate(worst))} in ${num(worst.games)}).`);
   }
   const tl = st.tilt;
   if (tl.afterWin.games >= 15 && tl.afterLoss.games >= 15) {
@@ -463,16 +619,16 @@ function renderInsights(e, who) {
   }
   const dows = st.days.reduce((a, d) => { a[d.dow]++; return a; }, Array(7).fill(0));
   const dowAvg = st.byDow.map((d) => ({ dow: d.dow, avg: dows[d.dow] ? d.time / dows[d.dow] : 0 }));
-  if (st.range.days >= 14 && t.time > 0) {
+  if (st.range.days >= 14 && t.liveDays >= 4) {
     const hi = dowAvg.reduce((a, b) => (b.avg > a.avg ? b : a)), lo = dowAvg.reduce((a, b) => (b.avg < a.avg ? b : a));
     out.push(`**${dowName(hi.dow)}s** are the heaviest day at ${dur(hi.avg)} on average; ${lo.avg > 0 ? `${dowName(lo.dow)}s the lightest at ${dur(lo.avg)}` : `nothing was played on a ${dowName(lo.dow)}`}.`);
   }
   if (st.elo.ratedGames >= 5 && st.records.bestEloDay && st.records.worstEloDay) {
     const b = st.days.find((d) => d.date === st.records.bestEloDay), w = st.days.find((d) => d.date === st.records.worstEloDay);
-    if (b && w && b.eloNet > 0 && w.eloNet < 0) out.push(`Best day for the rating: **${signed(b.eloNet)}** on ${dateStr(b.date, dfShort)}. Worst: **${signed(w.eloNet)}** on ${dateStr(w.date, dfShort)}.`);
+    if (b && w && b.eloNet > 0 && w.eloNet < 0) out.push(`Best day for the rating: **${signed(b.eloNet)}** on ${sd(b.date)}. Worst: **${signed(w.eloNet)}** on ${sd(w.date)}.`);
   }
   const c = st.clock;
-  if (t.losses >= 10 && c.timeoutLosses / t.losses >= 0.12) out.push(`**${pct(c.timeoutLosses / t.losses)}** of the losses came from running out of time (${c.timeoutLosses} games).`);
+  if (t.losses >= 10 && c.timeoutLosses / t.losses >= 0.12) out.push(`**${pct(c.timeoutLosses / t.losses)}** of the losses came from running out of time (${num(c.timeoutLosses)} games).`);
   if (t.thinkGames >= 20 && c.fasterShare != null) out.push(`${who} used less clock than the opponent in **${pct(c.fasterShare)}** of games.`);
   const heavy = st.dailyLoad.filter((d) => d.days >= 2);
   if (heavy.length >= 2) {
@@ -482,9 +638,9 @@ function renderInsights(e, who) {
   const wc = st.byColor.white, bc = st.byColor.black;
   if (wc.games >= 20 && bc.games >= 20 && Math.abs(rate(wc) - rate(bc)) >= 0.05) out.push(`With white: ${pct(rate(wc))} won. With black: **${pct(rate(bc))}**.`);
   const ds = st.streaks.longestDayStreak;
-  if (ds && ds.length >= 5) out.push(`Longest run without a day off: **${ds.length} days**, ${dateStr(ds.startDate, dfShort)} to ${dateStr(ds.endDate, dfShort)}.`);
+  if (ds && ds.length >= 5) out.push(`Longest run without a day off: **${num(ds.length)} days**, ${sdSpan(ds.startDate, ds.endDate)}.`);
   const lg = st.records.longestGame != null ? e.view[st.records.longestGame] : null;
-  if (lg && lg.duration > 0) out.push(`The longest single game took **${dur(lg.duration)}**, a ${lg.outcome} against ${lg.opponent} on ${dfShort.format(new Date(lg.start))}.`);
+  if (lg && lg.duration > 0) out.push(`The longest single game took **${dur(lg.duration)}**, a ${lg.outcome} against ${lg.opponent} on ${sd(lg.start)}.`);
   $('secInsights').hidden = out.length === 0;
   $('insights').replaceChildren(...out.slice(0, 10).map((s) => el('li', null, rich(s))));
 }
@@ -519,9 +675,13 @@ function bucketize(e, mode) {
     if (d.lastEnd != null && (b.lastEnd == null || d.lastEnd > b.lastEnd)) b.lastEnd = d.lastEnd;
   }
   const out = [...map.values()];
+  // A session that runs past midnight counts on both days, so summing the days would count it twice:
+  // count each session once for every bucket it has a game in.
+  const spans = e.stats.sessions.list.map((s) => [ymd(new Date(e.view[s.firstIdx].start)), ymd(new Date(e.view[s.lastIdx].start))]);
   for (const b of out) {
     [b.bestWinStreak, b.bestLossStreak] = streaksOf(b.gameIdx.map((i) => e.view[i]));
-    b.label = mode === 'week' ? `${dateStr(b.first, dfShort)} to ${dateStr(b.last, dfMed)}` : dfMonth.format(parseYmd(b.first));
+    b.sessions = spans.reduce((n, [a, z]) => n + (a <= b.last && z >= b.first ? 1 : 0), 0);
+    b.label = mode !== 'week' ? dfMonth.format(parseYmd(b.first)) : b.first === b.last ? dateStr(b.first, dfMed) : `${dateStr(b.first, dfShort)} to ${dateStr(b.last, dfMed)}`;
   }
   return out;
 }
@@ -530,20 +690,53 @@ function granOf(e) {
   if (S.gran !== 'auto' && !(S.gran === 'day' && n > 800)) return S.gran;
   return n <= 92 ? 'day' : n <= 550 ? 'week' : 'month';
 }
-function bucketTip(b) {
-  const rows = [['Time', dur(b.time)], ['Games', `${b.games}`]];
+function bucketRows(b) {
+  const rows = b.time || !b.games ? [['Time', dur(b.time)]] : [];
+  rows.push(['Games', num(b.games)]);
   if (b.games) {
     rows.push(['Won, drawn, lost', wdl(b)]);
-    if (b.eloGained || b.eloLost) rows.push(['Rating', `${signed(b.eloNet)}  (+${b.eloGained} ${MINUS}${b.eloLost})`]);
-    rows.push(['Best winning streak', `${b.bestWinStreak}`], ['Worst losing streak', `${b.bestLossStreak}`]);
+    if (b.eloGained || b.eloLost) rows.push(['Rating', `${signed(b.eloNet)}  (${gain(b.eloGained)} ${loss(b.eloLost)})`]);
+    rows.push(['Best winning streak', num(b.bestWinStreak)], ['Worst losing streak', num(b.bestLossStreak)]);
   }
-  return tipBox(b.label, rows);
+  return rows;
 }
-function select(mode, k, scroll) {
+function bucketTip(b) { return tipBox(b.label, bucketRows(b)); }
+// The same readout as one sentence, for the day chart's live region.
+function bucketText(b) {
+  if (!b.games) return `${b.label}: no games.`;
+  const parts = [b.time ? `${dur(b.time)} played` : null, plural(b.games, 'game'), `${num(b.wins)} won, ${num(b.draws)} drawn, ${num(b.losses)} lost`];
+  if (b.eloGained || b.eloLost) parts.push(`rating ${signed(b.eloNet)}`);
+  return `${b.label}: ${parts.filter(Boolean).join(', ')}.`;
+}
+// The control that opened the detail panel: an element, or a data-fk to find its re-rendered copy.
+let opener = null;
+/**
+ * Opens (or, from the day chart, toggles) a day, week or month in the detail panel.
+ * `scroll` brings the panel into view and never toggles; `kb` (opened from the keyboard) moves the
+ * focus to the panel's heading; `from` is what to give the focus back to when the panel closes.
+ */
+function select(mode, k, { scroll = false, kb = false, from = null } = {}) {
   S.sel = S.sel && S.sel.mode === mode && S.sel.key === k && !scroll ? null : { mode, key: k };
+  opener = S.sel ? from : null;
   const e = focusEntry();
   renderDays(e); renderLedger(e);
-  if (scroll && S.sel) $('detail').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest' });
+  const box = $('detail'), head = $('detailTitle');
+  if (!S.sel || box.hidden || !head) return;
+  if (scroll) {
+    // The panel sits above the calendar and the ledger: bring its top into view, all of it when it fits.
+    const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    box.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: box.offsetHeight <= innerHeight ? 'nearest' : 'start' });
+  }
+  if (kb) head.focus({ preventScroll: scroll });
+}
+function closeDetail(kb) {
+  if (!S.sel) return;
+  const back = opener;
+  opener = null; S.sel = null;
+  const e = focusEntry();
+  renderDays(e); renderLedger(e);
+  const t = back instanceof Element ? (back.isConnected ? back : null) : back ? document.querySelector(`[data-fk="${CSS.escape(back)}"]`) : null;
+  (t && !t.closest('[hidden]') ? t : document.querySelector('#dayChart svg'))?.focus({ preventScroll: !kb });
 }
 
 function renderDays(e) {
@@ -566,17 +759,29 @@ function renderDays(e) {
     if (S.sel.mode === gran) selKey = S.sel.key;
     else if (S.sel.mode === 'day') selKey = gran === 'week' ? ymd(addDays(parseYmd(S.sel.key), -((parseYmd(S.sel.key).getDay() + 6) % 7))) : S.sel.key.slice(0, 7);
   }
-  $('daysSub').textContent = `Time at the board${st.elo.ratedGames ? ', and rating won and lost' : ''}. Pick a ${gran === 'day' ? 'day' : gran} to open it${matchMedia('(hover: hover)').matches ? '; arrow keys work too' : ''}.`;
+  const timed = hasTime(st);
+  $('daysSub').textContent = `${timed ? 'Time at the board' : 'Games'}${st.elo.ratedGames ? ', and rating won and lost' : ''}. Pick a ${gran === 'day' ? 'day' : gran} to open it${matchMedia('(hover: hover)').matches ? '; arrow keys work too' : ''}.`;
+  // With daily games only there is no time panel; with no rated games either, there is nothing to draw.
+  $('dayChart').parentElement.hidden = !timed && !st.elo.ratedGames;
   dayChart($('dayChart'), buckets, {
-    label: `Time played per ${gran}. Use the left and right arrow keys to read values, Enter to open one.`,
-    classes: CLASSES, selectedKey: selKey, fmtTime: dur, tip: bucketTip,
-    tick: (b) => (gran === 'month' ? dfMonYr.format(parseYmd(b.first)) : dateStr(gran === 'day' ? b.date : b.first, dfShort)),
-    onSelect: (b) => select(gran, b.key),
+    label: `${timed ? 'Time played' : 'Rating won and lost'} per ${gran}. Use the left and right arrow keys, Home and End to read values, Enter to open one.`,
+    classes: CLASSES, selectedKey: selKey, fmtTime: dur, tip: bucketTip, showTime: timed,
+    cursorKey: chartCursor, onCursor: (b) => { chartCursor = b.key; },
+    announce: (b) => { $('dayChartLive').textContent = bucketText(b); },
+    // "Mar 2017", never "Mar 17", which reads as the 17th of March.
+    tick: (b) => (gran === 'month' ? dfMonYear.format(parseYmd(b.first)) : sd(gran === 'day' ? b.date : b.first)),
+    tickWidth: gran === 'month' ? 78 : multiYear ? 100 : null,
+    onSelect: (b, kb) => select(gran, b.key, { kb }),
   });
   renderDetail(e);
   renderCalendar(e);
 }
+let chartCursor = null; // key of the bar the day chart's keyboard cursor is on
 
+/** A player's name as a link to their chess.com profile. */
+function profileLink(name) {
+  return el('a', { href: `https://www.chess.com/member/${encodeURIComponent(name)}`, target: '_blank', rel: 'noopener', title: `${name} on chess.com`, text: name });
+}
 function resultPill(g) {
   const c = g.outcome === 'win' ? 'w' : g.outcome === 'loss' ? 'l' : 'd';
   return el('span', { class: `pill ${c}`, text: c === 'w' ? 'W' : c === 'l' ? 'L' : 'D', title: `${g.outcome === 'win' ? 'Won' : g.outcome === 'loss' ? 'Lost' : 'Drew'} by ${(ENDING[g.ending] || g.ending || '').toLowerCase()}` });
@@ -590,35 +795,45 @@ function renderDetail(e) {
   const games = b.gameIdx.map((i) => e.view[i]);
   const multi = S.sel.mode !== 'day';
   const head = el('div', { class: 'detail-head' },
-    el('div', null, el('h3', { text: b.label }),
-      el('p', { text: b.games ? (multi ? `${b.activeDays} of ${plural(b.span, 'day')} played` : b.firstStart ? `First game ${dfTime.format(new Date(b.firstStart))}, last one over at ${dfTime.format(new Date(b.lastEnd))}` : '') : 'No games.' })),
-    el('button', { type: 'button', class: 'ghost-btn', text: 'Close', onclick: () => { S.sel = null; renderDays(e); renderLedger(e); } }));
+    // tabindex -1: the focus moves here when a day is opened from the keyboard.
+    el('div', null, el('h3', { text: b.label, id: 'detailTitle', tabindex: -1 }),
+      el('p', { text: b.games ? (multi ? `${num(b.activeDays)} of ${plural(b.span, 'day')} played` : b.firstStart ? `First game ${dfTime.format(new Date(b.firstStart))}, last one over at ${dfTime.format(new Date(b.lastEnd))}` : '') : 'No games.' })),
+    el('button', { type: 'button', class: 'ghost-btn', text: 'Close', onclick: (ev) => closeDetail(ev.detail === 0) }));
   box.replaceChildren(head);
   if (!b.games) return;
   const quip = multi ? null : dayQuip(b, games, FMT);
   if (quip) box.append(el('p', { class: 'quip' }, pawnMark(), el('span', { text: quip })));
   const think = b.myThink + b.oppThink;
   box.append(el('dl', { class: 'tiles' },
-    tile('Time', durNode(b.time), `${plural(b.sessions, 'session')}`),
-    tile('Games', String(b.games), `${wdl(b)} won, drawn, lost`),
-    tile('Rating', el('span', { class: b.eloNet > 0 ? 'up' : b.eloNet < 0 ? 'down' : '', text: signed(b.eloNet) }), `+${b.eloGained} won, ${MINUS}${b.eloLost} lost`),
-    tile('Best winning streak', String(b.bestWinStreak), b.bestWinStreak === 1 ? 'game' : 'games in a row'),
-    tile('Worst losing streak', String(b.bestLossStreak), b.bestLossStreak === 1 ? 'game' : 'games in a row'),
+    // Daily games only: no time at the board and no sessions.
+    tile('Time', b.time ? durNode(b.time) : '–', b.time ? plural(b.sessions, 'session') : 'daily games have no clock'),
+    tile('Games', num(b.games), `${wdl(b)} won, drawn, lost`),
+    tile('Rating', el('span', { class: b.eloNet > 0 ? 'up' : b.eloNet < 0 ? 'down' : '', text: signed(b.eloNet) }), ratingNote(b.eloGained, b.eloLost)),
+    tile('Best winning streak', num(b.bestWinStreak), b.bestWinStreak === 1 ? 'game' : 'games in a row'),
+    tile('Worst losing streak', num(b.bestLossStreak), b.bestLossStreak === 1 ? 'game' : 'games in a row'),
     tile('Own clock', think ? durNode(b.myThink) : '–', think ? `opponents ${dur(b.oppThink)}` : 'no clock data'),
   ));
   const cap = 250, shown = games.slice(0, cap);
-  const rows = shown.map((g) => el('tr', null,
-    el('td', { text: multi ? `${dfShort.format(new Date(g.start))}, ${dfTime.format(new Date(g.start))}` : dfTime.format(new Date(g.start)) }),
-    el('td', null, resultPill(g)),
-    el('td', null, el('a', { href: g.url, target: '_blank', rel: 'noopener', text: g.opponent }), g.oppRating ? ` (${g.oppRating})` : ''),
-    el('td', { text: `${CLASS_LABEL[g.timeClass] || g.timeClass}, ${controlLabel(g)}${g.rated ? '' : ', unrated'}` }),
-    el('td', { class: 'num', text: g.live === false ? '–' : dur(g.duration) }),
-    el('td', { class: 'num', text: g.myThink != null ? `${dur(g.myThink)} / ${dur(g.oppThink)}` : '–' }),
-    el('td', { class: `num ${g.ratingDelta > 0 ? 'up' : g.ratingDelta < 0 ? 'down' : ''}`, text: g.ratingDelta == null ? '–' : signed(g.ratingDelta) }),
-    el('td', { class: 'num', text: g.myRating ?? '–' }),
-  ));
-  box.append(el('div', { class: 'table-wrap tall' }, el('table', { class: 'ledger' },
-    el('thead', null, el('tr', null, ...['Started', '', 'Opponent', 'Game', 'Length', 'Clock, own / theirs', 'Rating', 'After'].map((h, i) => el('th', { class: i >= 4 ? 'num' : null, text: h })))),
+  // A name always opens that player's profile; "Open game" opens the game. On a phone the table keeps
+  // result, opponent, rating change, length and the link, with the start and game type on a second line.
+  const rows = shown.map((g) => {
+    const when = multi ? `${sd(g.start)}, ${dfTime.format(new Date(g.start))}` : dfTime.format(new Date(g.start));
+    const kind = `${CLASS_LABEL[g.timeClass] || g.timeClass}, ${controlLabel(g)}${g.rated ? '' : ', unrated'}`;
+    return el('tr', null,
+      el('td', { class: 'c-start', text: when }),
+      el('td', { class: 'c-res' }, resultPill(g)),
+      el('td', { class: 'c-opp' }, profileLink(g.opponent), g.oppRating ? ` (${g.oppRating})` : '', el('small', { class: 'c-sub', text: `${when}, ${kind}` })),
+      el('td', { class: 'c-game', text: kind }),
+      el('td', { class: 'num c-len', text: g.live === false ? '–' : dur(g.duration) }),
+      el('td', { class: 'num c-clock', text: g.myThink != null ? `${dur(g.myThink)} / ${dur(g.oppThink)}` : '–' }),
+      el('td', { class: `num c-rat ${g.ratingDelta > 0 ? 'up' : g.ratingDelta < 0 ? 'down' : ''}`, text: g.ratingDelta == null ? '–' : signed(g.ratingDelta) }),
+      el('td', { class: 'num c-after', text: g.myRating ?? '–' }),
+      el('td', { class: 'c-open' }, isChessComUrl(g.url) && el('a', { href: g.url, target: '_blank', rel: 'noopener', 'aria-label': `Open the game against ${g.opponent} on chess.com` }, 'Open', el('span', { class: 'c-wide', text: ' game' }))),
+    );
+  });
+  const heads = [['Started', 'c-start'], ['', 'c-res'], ['Opponent', 'c-opp'], ['Game', 'c-game'], ['Length', 'num c-len'], ['Clock, own / theirs', 'num c-clock'], ['Rating', 'num c-rat'], ['After', 'num c-after'], ['', 'c-open']];
+  box.append(el('div', { class: 'table-wrap tall' }, el('table', { class: 'ledger games' },
+    el('thead', null, el('tr', null, ...heads.map(([h, c]) => el('th', { class: c, text: h })))),
     el('tbody', null, ...rows))));
   if (games.length > cap) box.append(el('p', { class: 'note', text: `Showing the first ${cap} of ${num(games.length)} games.` }));
 }
@@ -632,7 +847,7 @@ function renderCalendar(e) {
   const show = n >= 28 && n <= 1100;
   $('calPanel').hidden = !show;
   if (!show) return;
-  const max = Math.max(...days.map((d) => d.time));
+  const max = maxOf(days, (d) => d.time);
   const cal = $('cal'), nodes = [];
   let col = [];
   let lastMonth = '';
@@ -640,59 +855,112 @@ function renderCalendar(e) {
     if (!col.length) return;
     const mo = first.date.slice(0, 7);
     const showLabel = mo !== lastMonth && (lastMonth === '' || Number(first.date.slice(8)) <= 7);
-    nodes.push(el('span', { text: showLabel ? dfMonShort.format(parseYmd(first.date)) : '' }));
+    // On a range that spans years, the first label and every January carry the year.
+    const withYear = multiYear && (lastMonth === '' || mo.endsWith('-01'));
+    nodes.push(el('span', { text: showLabel ? (withYear ? dfMonYear : dfMonShort).format(parseYmd(first.date)) : '' }));
     if (showLabel) lastMonth = mo;
     nodes.push(...col);
     col = [];
   };
   let firstOfCol = days[0];
   for (let i = 0; i < days[0].dow; i++) col.push(el('i'));
+  const cells = [];
+  let dailyOnly = false;
   for (const d of days) {
     if (d.dow === 0 && col.length) { flush(firstOfCol); firstOfCol = d; }
     if (!col.length) firstOfCol = d;
+    if (d.games && !d.time) dailyOnly = true;
     const b = el('button', {
-      type: 'button', tabindex: -1, 'aria-label': `${dateStr(d.date, dfLong)}: ${dur(d.time)}, ${plural(d.games, 'game')}`,
+      type: 'button', 'data-fk': `cal:${d.date}`,
+      'aria-label': `${dateStr(d.date, dfLong)}: ${d.games ? `${d.time ? `${dur(d.time)}, ` : ''}${plural(d.games, 'game')}` : 'no games'}`,
       'aria-pressed': String(S.sel?.mode === 'day' && S.sel.key === d.date),
       style: d.time ? `background:${mixTime(LEVEL_MIX[level(d.time, max)])}` : (d.games ? 'background:var(--axis)' : null),
-      onclick: () => select('day', d.date),
+      // Like a ledger row: always opens (never toggles) and brings the panel above into view.
+      onclick: (ev) => select('day', d.date, { scroll: true, kb: ev.detail === 0, from: `cal:${d.date}` }),
     });
     setTip(b, () => bucketTip({ ...d, label: dateStr(d.date, dfLong) }));
-    col.push(b);
+    col.push(b); cells.push(b);
   }
   while (col.length < 7) col.push(el('i'));
   flush(firstOfCol);
-  cal.replaceChildren(...nodes);
-  const weeks = nodes.length / 8, room = (cal.parentElement.clientWidth || 600) - 6;
-  cal.style.setProperty('--c', `${Math.max(13, Math.min(22, Math.floor(room / weeks) - 3))}px`);
-  $('calScale').replaceChildren('Less', ...[0, 1, 2, 3, 4, 5].map((l) => el('i', { style: `background:${l ? mixTime(LEVEL_MIX[l]) : 'var(--surface-2)'}` })), `More (up to ${dur(max)} in a day)`);
-  const wrap = cal.parentElement; wrap.scrollLeft = wrap.scrollWidth;
+  swap(cal, ...nodes);
+  // One tab stop: up and down move a day, left and right a week (a column is a week).
+  const at = (date) => days.findIndex((d) => d.date === date);
+  let active = at(calCursor);
+  if (active < 0 && S.sel?.mode === 'day') active = at(S.sel.key);
+  if (active < 0) active = days.findLastIndex((d) => d.games);
+  if (active < 0) active = n - 1;
+  rove(cal, cells, active, (i, k) => ({ ArrowUp: i - 1, ArrowDown: i + 1, ArrowLeft: i - 7, ArrowRight: i + 7, Home: 0, End: n - 1 })[k], (i) => { calCursor = days[i].date; });
+  cal.setAttribute('role', 'group');
+  cal.setAttribute('aria-label', 'Calendar, one square per day. Arrow keys move by day and week, Enter opens a day.');
+  // Square size: as large as the panel allows, within reason. A short range does not need the whole
+  // width, so the busiest days sit beside it; a long one takes the row and the list drops below.
+  const panel = $('calPanel'), phone = innerWidth <= 600;
+  const weeks = nodes.length / 8, room = (panel.clientWidth || 600) - (phone ? 30 : 38) - 40;
+  const c = Math.max(13, Math.min(phone ? 34 : 24, Math.floor(room / weeks) - 3));
+  cal.parentElement.parentElement.style.setProperty('--c', `${c}px`);
+  // Weekday labels down the side: all seven when the squares are tall enough, else every other one.
+  $('calWd').replaceChildren(el('span'), ...[0, 1, 2, 3, 4, 5, 6].map((d) => el('span', { text: c >= 15 || d % 2 === 0 ? dowName(d, true) : '' })));
+  renderTopDays(e);
+  // Days with only daily games have games but no time: they are drawn grey, and the legend says so.
+  const greyKey = dailyOnly ? [el('i', { style: 'background:var(--axis);margin-left:10px' }), 'daily games, no clock'] : [];
+  $('calScale').replaceChildren(...(max > 0
+    ? ['Less', ...[0, 1, 2, 3, 4, 5].map((l) => el('i', { style: `background:${l ? mixTime(LEVEL_MIX[l]) : 'var(--surface-2)'}` })), `More (up to ${dur(max)} in a day)`]
+    : [el('i', { style: 'background:var(--surface-2)' }), 'no games']), ...greyKey);
+  const wrap = cal.parentElement;
+  if (!wrap.contains(document.activeElement)) wrap.scrollLeft = wrap.scrollWidth;
 }
+// The five heaviest days as a ranked list beside the calendar. Each one opens its day.
+function renderTopDays(e) {
+  const st = e.stats, timed = hasTime(st), val = (d) => (timed ? d.time : d.games);
+  const top = st.days.filter((d) => val(d) > 0).sort((a, b) => val(b) - val(a) || (a.date < b.date ? 1 : -1)).slice(0, 5);
+  const box = $('topDays').parentElement;
+  box.hidden = top.length < 2;
+  if (box.hidden) return;
+  $('topDaysTitle').textContent = timed ? 'Busiest days' : 'Days with the most games';
+  swap($('topDays'), ...top.map((d) => {
+    const b = el('button', { type: 'button', class: 'link-btn', text: dateStr(d.date, dfLong), 'data-fk': `top:${d.date}`, onclick: (ev) => select('day', d.date, { scroll: true, kb: ev.detail === 0, from: `top:${d.date}` }) });
+    return el('div', { class: 'row' },
+      el('span', { class: 'rl' }, b),
+      el('span', { class: 'track' }, el('span', { class: 'fill', style: `width:${(val(d) / val(top[0])) * 100}%` })),
+      el('span', { class: 'rv' }, timed ? dur(d.time) : plural(d.games, 'game'), timed ? el('small', { text: plural(d.games, 'game') }) : null));
+  }));
+}
+let calCursor = null; // date of the calendar square that holds the tab stop
+let heatCursor = 0; // index (dow * 24 + hour) of the heatmap square that holds the tab stop
+const MIN_GAMES = 4; // fewer games than this in a slot or bucket are too few to read a win rate from
 
 // ---------- rating ----------
 function renderElo(e) {
   const st = e.stats, pools = st.elo.byPool;
   $('secElo').hidden = !pools.length;
   if (!pools.length) return;
-  if (!pools.some((p) => p.pool === S.pool)) S.pool = pools[0].pool;
-  const p = pools.find((x) => x.pool === S.pool);
-  seg($('poolSeg'), pools.slice(0, 6).map((x) => ({ value: x.pool, label: poolLabel(x) })), S.pool, (v) => { S.pool = v; renderElo(e); });
+  // S.pool is the list picked by hand (kept in the link as pool=); the busiest list is shown otherwise.
+  const p = pools.find((x) => x.pool === S.pool) || pools[0];
+  seg($('poolSeg'), pools.slice(0, 6).map((x) => ({ value: x.pool, label: poolLabel(x) })), p.pool, (v) => { S.pool = v; writeUrl(); renderElo(e); });
   $('poolSeg').hidden = pools.length < 2;
   const sp = (cls, text) => el('span', { class: cls, text });
+  // A zero is "0", without a sign; a zero in running text is a dash.
   $('eloTiles').replaceChildren(
-    tile('Rating won', sp('up', `+${num(p.gained)}`), `over ${plural(p.games, 'rated game')}`),
-    tile('Rating lost', sp('down', `${MINUS}${num(p.lost)}`), pools.length > 1 ? `all lists: +${num(st.elo.gained)} ${MINUS}${num(st.elo.lost)}` : `${(p.lost / Math.max(1, p.games)).toFixed(1)} a game`),
+    tile('Rating won', p.gained ? sp('up', `+${num(p.gained)}`) : '0', `over ${plural(p.games, 'rated game')}`),
+    tile('Rating lost', p.lost ? sp('down', `${MINUS}${num(p.lost)}`) : '0', p.lost ? `${(p.lost / p.games).toFixed(1)} a game` : 'not a point dropped'),
     tile('Net change', sp(p.net > 0 ? 'up' : p.net < 0 ? 'down' : '', signed(p.net)), `${p.start} to ${p.end}`),
     tile('Peak', String(p.peak), `lowest ${p.low}`),
   );
   // One even step per rated game: plotted against real time, a session collapses into a vertical cliff.
   const pts = p.series.map((s, k) => ({ t: k, v: s.rating, i: s.i, at: s.t }));
-  $('eloNote').textContent = `One step per rated game, ${num(pts.length)} in all. The dates under the line show when those games were played.`;
+  // The totals over every rating list belong to the section, not to one list's tile.
+  $('eloSub').textContent = `Every rated game moves the rating. This is the sum of the ups, the sum of the downs, and where that left it.${pools.length > 1 ? ` Across all ${num(pools.length)} rating lists: ${gain(st.elo.gained)} won, ${loss(st.elo.lost)} lost.` : ''}`;
+  $('eloNote').textContent = `The line takes one step per rated game (${num(pts.length)} in all), so a busy day is wide and a quiet week is narrow. Each date marks that day’s first rated game.`;
+  // Tick candidates: the first rated game of each calendar day. The chart draws the ones that fit.
+  const ticks = [];
+  for (let k = 0, last = ''; k < pts.length; k++) { const dkey = ymd(new Date(pts[k].at)); if (dkey !== last) { ticks.push({ t: k, label: sd(pts[k].at) }); last = dkey; } }
   lineChart($('eloChart'), pts, {
     label: `${poolLabel(p)} rating over time, from ${p.start} to ${p.end}`, start: p.start,
-    fmtX: (t) => dfShort.format(new Date(pts[Math.max(0, Math.min(pts.length - 1, Math.round(t)))].at)),
+    ticks,
     tip: (pt) => {
       const g = e.view[pt.i];
-      return tipBox(String(pt.v), g ? [['When', `${dfShort.format(new Date(g.end))}, ${dfTime.format(new Date(g.end))}`], ['Game', `${g.outcome} vs ${g.opponent}`], ['Change', g.ratingDelta == null ? '–' : signed(g.ratingDelta)]] : []);
+      return tipBox(String(pt.v), g ? [['When', `${sd(g.end)}, ${dfTime.format(new Date(g.end))}`], ['Game', `${g.outcome} vs ${g.opponent}`], ['Change', g.ratingDelta == null ? '–' : signed(g.ratingDelta)]] : []);
     },
   });
 }
@@ -700,13 +968,13 @@ function renderElo(e) {
 // ---------- streaks ----------
 function renderStreaks(e) {
   const st = e.stats, s = st.streaks, games = e.view;
-  const span = (x) => (x && x.length ? `${dfShort.format(new Date(x.start))}${ymd(new Date(x.start)) !== ymd(new Date(x.end)) ? ' to ' + dfShort.format(new Date(x.end)) : ''}` : null);
+  const span = (x) => (x && x.length ? sdSpan(x.start, x.end) : null);
   const cur = s.current;
   $('streakTiles').replaceChildren(
-    tile('Longest winning streak', String(s.longestWin?.length || 0), span(s.longestWin) || 'no wins in the range'),
-    tile('Longest losing streak', String(s.longestLoss?.length || 0), span(s.longestLoss) || 'no losses in the range'),
-    tile('Streak at the end of the range', cur?.type && cur.length ? `${cur.length} ${cur.type === 'win' ? 'won' : cur.type === 'loss' ? 'lost' : 'drawn'}` : '–', 'counting back from the last game'),
-    tile('Most days in a row', String(s.longestDayStreak?.length || 0), s.longestDayStreak?.length ? `${dateStr(s.longestDayStreak.startDate, dfShort)} to ${dateStr(s.longestDayStreak.endDate, dfShort)}` : null),
+    tile('Longest winning streak', num(s.longestWin?.length || 0), span(s.longestWin) || 'no wins in the range'),
+    tile('Longest losing streak', num(s.longestLoss?.length || 0), span(s.longestLoss) || 'no losses in the range'),
+    tile('Streak at the end of the range', cur?.type && cur.length ? `${num(cur.length)} ${cur.type === 'win' ? 'won' : cur.type === 'loss' ? 'lost' : 'drawn'}` : '–', 'counting back from the last game'),
+    tile('Most days in a row', num(s.longestDayStreak?.length || 0), s.longestDayStreak?.length ? sdSpan(s.longestDayStreak.startDate, s.longestDayStreak.endDate) : null),
   );
   const cap = 300, from = Math.max(0, games.length - cap);
   $('tapeTitle').textContent = games.length > cap ? `The last ${cap} results, oldest first` : `All ${plural(games.length, 'result')}, oldest first`;
@@ -715,7 +983,7 @@ function renderStreaks(e) {
   for (let i = from; i < games.length; i++) {
     const g = games[i];
     const n = el('i', { class: `${g.outcome === 'win' ? 'w' : g.outcome === 'loss' ? 'l' : ''}${inRun(i, s.longestWin) || inRun(i, s.longestLoss) ? ' hl' : ''}` });
-    setTip(n, () => tipBox(`${g.outcome === 'win' ? 'Won' : g.outcome === 'loss' ? 'Lost' : 'Drew'} vs ${g.opponent}`, [['When', `${dfShort.format(new Date(g.start))}, ${dfTime.format(new Date(g.start))}`], ['Game', `${CLASS_LABEL[g.timeClass] || g.timeClass}, ${controlLabel(g)}`], ['Rating', g.ratingDelta == null ? '–' : signed(g.ratingDelta)]]));
+    setTip(n, () => tipBox(`${g.outcome === 'win' ? 'Won' : g.outcome === 'loss' ? 'Lost' : 'Drew'} vs ${g.opponent}`, [['When', `${sd(g.start)}, ${dfTime.format(new Date(g.start))}`], ['Game', `${CLASS_LABEL[g.timeClass] || g.timeClass}, ${controlLabel(g)}`], ['Rating', g.ratingDelta == null ? '–' : signed(g.ratingDelta)]]));
     frag.push(n);
   }
   $('tape').replaceChildren(...frag);
@@ -727,39 +995,62 @@ function renderStreaks(e) {
 
 // ---------- time of week ----------
 function renderWhen(e) {
-  const st = e.stats;
-  seg($('heatSeg'), [{ value: 'time', label: 'Time' }, { value: 'games', label: 'Games' }, { value: 'win', label: 'Win rate' }, { value: 'elo', label: 'Rating' }], S.heat, (v) => { S.heat = v; renderWhen(e); });
+  const st = e.stats, timed = hasTime(st);
+  // Without time at the board the Time view would be blank: show games instead (the choice is kept for later).
+  const mode = S.heat === 'time' && !timed ? 'games' : S.heat;
+  seg($('heatSeg'), [{ value: 'time', label: 'Time', disabled: !timed }, { value: 'games', label: 'Games' }, { value: 'win', label: 'Win rate' }, { value: 'elo', label: 'Rating' }], mode, (v) => { S.heat = v; renderWhen(e); });
   const cells = st.heatmap.flat();
-  const max = S.heat === 'time' ? Math.max(...cells.map((c) => c.time)) : S.heat === 'games' ? Math.max(...cells.map((c) => c.games)) : S.heat === 'elo' ? Math.max(1, ...cells.map((c) => Math.abs(c.eloNet))) : 0;
-  const minGames = 4;
+  const max = mode === 'time' ? maxOf(cells, (c) => c.time) : mode === 'games' ? maxOf(cells, (c) => c.games) : mode === 'elo' ? maxOf(cells, (c) => Math.abs(c.eloNet), 1) : 0;
+  const minGames = MIN_GAMES;
   const div = (good, mag) => `color-mix(in oklab, var(--${good ? 'win' : 'loss'}) ${Math.round(Math.min(1, Math.max(0.12, mag)) * 100)}%, var(--surface-2))`;
   const colour = (c) => {
     if (!c.games) return null;
-    if (S.heat === 'time') return c.time ? mixTime(0.15 + 0.85 * (c.time / max)) : null;
-    if (S.heat === 'games') return mixTime(0.15 + 0.85 * (c.games / max));
-    if (S.heat === 'win') { if (c.games < minGames) return 'var(--line)'; const r = c.wins / c.games; return div(r >= 0.5, Math.abs(r - 0.5) / 0.3); }
+    if (mode === 'time') return c.time ? mixTime(0.15 + 0.85 * (c.time / max)) : null;
+    if (mode === 'games') return mixTime(0.15 + 0.85 * (c.games / max));
+    if (mode === 'win') { if (c.games < minGames) return 'var(--line)'; const r = c.wins / c.games; return div(r >= 0.5, Math.abs(r - 0.5) / 0.3); }
     return c.eloNet ? div(c.eloNet > 0, Math.abs(c.eloNet) / max) : 'var(--line)';
   };
-  const nodes = [el('span')];
+  const nodes = [el('span')], marks = [];
   for (let h = 0; h < 24; h++) nodes.push(el('span', { class: 'hh', text: h % 3 === 0 ? (H12 ? hourName(h).replace(/\s/g, '') : pad(h)) : '' }));
   st.heatmap.forEach((row, dow) => {
     nodes.push(el('span', { class: 'dd', text: dowName(dow, true) }));
     row.forEach((c, h) => {
-      const bg = colour(c);
-      const n = el('div', { class: 'cell', style: bg ? `background:${bg}` : null });
-      setTip(n, () => tipBox(`${dowName(dow)}, ${hourName(h)} to ${hourName((h + 1) % 24)}`, c.games ? [['Time', dur(c.time)], ['Games', String(c.games)], ['Won', `${pct(rate(c))} (${wdl(c)})`], ['Rating', signed(c.eloNet)]] : [], c.games ? null : 'No games'));
-      nodes.push(n);
+      const bg = colour(c), title = `${dowName(dow)}, ${hourName(h)} to ${hourName((h + 1) % 24)}`;
+      const n = el('div', {
+        class: 'cell', style: bg ? `background:${bg}` : null, role: 'img', 'data-fk': `heat:${dow}:${h}`,
+        'aria-label': `${title}: ${c.games ? `${c.time ? `${dur(c.time)}, ` : ''}${plural(c.games, 'game')}, ${pct(rate(c))} won, rating ${signed(c.eloNet)}` : 'no games'}`,
+      });
+      setTip(n, () => tipBox(title, c.games ? [...(c.time ? [['Time', dur(c.time)]] : []), ['Games', num(c.games)], ['Won', `${pct(rate(c))} (${wdl(c)})`], ['Rating', signed(c.eloNet)]] : [], c.games ? null : 'No games'));
+      nodes.push(n); marks.push(n);
     });
   });
-  $('heat').replaceChildren(...nodes);
+  swap($('heat'), ...nodes);
+  // One tab stop for the 168 squares: left and right move an hour, up and down a day.
+  rove($('heat'), marks, heatCursor, (i, k) => {
+    const row = Math.floor(i / 24);
+    return { ArrowLeft: i - 1, ArrowRight: i + 1, ArrowUp: i >= 24 ? i - 24 : null, ArrowDown: i < 144 ? i + 24 : null, Home: row * 24, End: row * 24 + 23 }[k];
+  }, (i) => { heatCursor = i; });
+  $('heat').setAttribute('role', 'group');
+  $('heat').setAttribute('aria-label', 'Hours of the week. Arrow keys move between hours and days.');
   const sw = (bg) => el('i', { style: `background:${bg}` });
-  $('heatScale').replaceChildren(...(S.heat === 'time' || S.heat === 'games'
-    ? ['Less', sw('var(--surface-2)'), ...[0.15, 0.4, 0.65, 1].map((f) => sw(mixTime(f))), `More (up to ${S.heat === 'time' ? dur(max) : plural(max, 'game')} in one slot)`]
-    : S.heat === 'win'
+  $('heatScale').replaceChildren(...(mode === 'time' || mode === 'games'
+    ? ['Less', sw('var(--surface-2)'), ...[0.15, 0.4, 0.65, 1].map((f) => sw(mixTime(f))), `More (up to ${mode === 'time' ? dur(max) : plural(max, 'game')} in one slot)`]
+    : mode === 'win'
       ? ['Mostly lost', ...[1, 0.5].map((f) => sw(div(false, f))), sw('var(--surface-2)'), ...[0.5, 1].map((f) => sw(div(true, f))), `Mostly won. Slots with fewer than ${minGames} games stay grey.`]
-      : ['Rating lost', ...[1, 0.5].map((f) => sw(div(false, f))), sw('var(--surface-2)'), ...[0.5, 1].map((f) => sw(div(true, f))), `Rating won (up to ${max} points in one slot)`]));
+      : ['Rating lost', ...[1, 0.5].map((f) => sw(div(false, f))), sw('var(--surface-2)'), ...[0.5, 1].map((f) => sw(div(true, f))), `Rating won (up to ${num(max)} points in one slot)`]));
+  // Average time per weekday means nothing without time at the board.
+  $('dowRows').closest('.panel').hidden = !timed;
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  $('whenSub').textContent = `Each square is one hour of the week${zone ? `, in ${zone.replace(/_/g, ' ')} time` : ''}.`;
+  $('whenSub').textContent = `Each square is one hour of the week on your clock${zone ? ` (${zone.replace(/_/g, ' ')})` : ''}, which may not be the player’s.`;
+  // On a phone the grid scrolls sideways: open it on the busiest hours, once per player and range.
+  const wrap = $('heat').parentElement, sig = `${key(S.users[S.focus] || '')}|${st.range.from}|${st.range.to}|${S.tc}|${S.rated}`;
+  if (wrap.dataset.for !== sig && wrap.scrollWidth > wrap.clientWidth + 4) {
+    wrap.dataset.for = sig;
+    let peak = 0;
+    st.byHour.forEach((h, i) => { if (h.games > st.byHour[peak].games) peak = i; });
+    const cell = marks[peak].getBoundingClientRect(), box = wrap.getBoundingClientRect();
+    wrap.scrollLeft = Math.max(0, cell.left - box.left + wrap.scrollLeft - (wrap.clientWidth + 38) / 2);
+  }
 
   const counts = st.days.reduce((a, d) => { a[d.dow]++; return a; }, Array(7).fill(0));
   const avg = st.byDow.map((d) => (counts[d.dow] ? d.time / counts[d.dow] : 0)), top = Math.max(...avg, 1);
@@ -770,10 +1061,13 @@ function renderWhen(e) {
 }
 
 // ---------- sessions ----------
+const BOTH = Symbol('spans both columns');
 function pairs(head, rows) {
   return el('div', { class: 'pairs' },
     el('div', { class: 'pair head' }, ...head.map((h) => el('span', { text: h }))),
-    ...rows.map((r) => el('div', { class: 'pair' }, el('span', { text: r[0] }), el('b', { text: r[1] }), r[2] != null ? el('b', { text: r[2] }) : el('span'))));
+    ...rows.map((r) => el('div', { class: 'pair' }, el('span', { text: r[0] }),
+      // [label, value, BOTH]: one figure that belongs to the first column's side, written across both columns.
+      r[2] === BOTH ? el('b', { text: r[1], style: 'grid-column: span 2' }) : [el('b', { text: r[1] }), r[2] != null ? el('b', { text: r[2] }) : el('span')])));
 }
 function renderSessions(e, who) {
   const st = e.stats, s = st.sessions;
@@ -781,14 +1075,15 @@ function renderSessions(e, who) {
   $('secSessions').hidden = !s.count;
   if (!s.count) return;
   $('sessionTiles').replaceChildren(
-    tile('Sessions', num(s.count), `${(s.count / Math.max(1, st.totals.activeDays)).toFixed(1)} on a day played`),
+    // Sessions are made of live games, so this is per day with a live game.
+    tile('Sessions', num(s.count), `${(s.count / Math.max(1, st.totals.liveDays)).toFixed(1)} on a day played`),
     tile('Average session', durNode(s.avgDuration), `${s.avgGames.toFixed(1)} games`),
     tile('Half of sessions are under', durNode(s.medianDuration), null),
-    tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? `${plural(longest.games, 'game')}, ${wdl(longest)}, rating ${signed(longest.eloNet)}` : null),
+    tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? `${plural(longest.games, 'game')}${sessionPlay(longest)}, rating ${signed(longest.eloNet)}` : null),
   );
   colChart($('posChart'), s.byPosition.map((p) => ({
     label: p.label, value: p.games ? (p.wins / p.games) * 100 : null,
-    tip: () => tipBox(`Game ${p.label} of a session`, [['Won', pct(rate(p))], ['Games', String(p.games)], ['Won, drawn, lost', wdl(p)], ['Rating', signed(p.eloNet)]]),
+    tip: () => tipBox(`Game ${p.label} of a session`, [['Won', pct(rate(p))], ['Games', num(p.games)], ['Won, drawn, lost', wdl(p)], ['Rating', signed(p.eloNet)]]),
   })), { label: 'Share of games won, by position of the game within a session', max: 100, step: 25, fmtY: (v) => v + '%', ref: 50 });
   const tl = st.tilt;
   $('tilt').replaceChildren(
@@ -807,9 +1102,9 @@ function renderSessions(e, who) {
     el('p', { class: 'note', text: `Days grouped by how many games ${who} played. The bar shows games won, drawn and lost; the last figure is the average rating change on such a day.` }));
 }
 function wdlBar(o, thin) {
-  const b = el('span', { class: `wdl${thin ? ' thin' : ''}`, role: 'img', 'aria-label': `${o.wins} won, ${o.draws} drawn, ${o.losses} lost` },
+  const b = el('span', { class: `wdl${thin ? ' thin' : ''}`, role: 'img', 'aria-label': `${num(o.wins)} won, ${num(o.draws)} drawn, ${num(o.losses)} lost` },
     o.wins > 0 && el('i', { class: 'w', style: `flex:${o.wins}` }), o.draws > 0 && el('i', { class: 'd', style: `flex:${o.draws}` }), o.losses > 0 && el('i', { class: 'l', style: `flex:${o.losses}` }));
-  setTip(b, () => tipBox(null, [['Won', `${o.wins} (${pct(o.wins / o.games)})`], ['Drawn', `${o.draws} (${pct(o.draws / o.games)})`], ['Lost', `${o.losses} (${pct(o.losses / o.games)})`]]));
+  setTip(b, () => tipBox(null, [['Won', `${num(o.wins)} (${pct(o.wins / o.games)})`], ['Drawn', `${num(o.draws)} (${pct(o.draws / o.games)})`], ['Lost', `${num(o.losses)} (${pct(o.losses / o.games)})`]]));
   return b;
 }
 
@@ -822,7 +1117,10 @@ function renderGames(e, who) {
     label: b.to == null ? `${edge(b.from)}+` : edge(b.from), value: b.count,
     tip: () => tipBox(b.to == null ? `${dur(b.from)} or longer` : `${dur(b.from)} to ${dur(b.to)}`, [['Games', num(b.count)], ['Share', pct(b.count / Math.max(1, t.liveGames))]]),
   })), { label: 'Number of games by how long they lasted', labelWidth: 44 });
-  $('histChart').hidden = !hist.length;
+  // Game length and the clock are about live games; with daily games only, both panels go.
+  const timed = hasTime(st);
+  $('histChart').closest('.panel').hidden = !hist.length || !timed;
+  $('clockStats').closest('.panel').hidden = !timed;
 
   const tg = t.thinkGames;
   $('clockStats').replaceChildren(tg ? pairs(['', who, 'Opponents'], [
@@ -831,7 +1129,8 @@ function renderGames(e, who) {
     ['Per move', c.avgMyMove != null ? `${c.avgMyMove.toFixed(1)}s` : '–', c.avgOppMove != null ? `${c.avgOppMove.toFixed(1)}s` : '–'],
     ['Left on the clock when winning', dur(c.avgLeftWin), null],
     ['Left on the clock when losing', dur(c.avgLeftLoss), null],
-    ['Games decided on time', `${c.timeoutWins} won`, `${c.timeoutLosses} lost`],
+    // Both figures are the player's own, so they share one cell instead of sitting under "Opponents".
+    ['Games decided on time', `${num(c.timeoutWins)} won, ${num(c.timeoutLosses)} lost`, BOTH],
   ]) : el('p', { class: 'empty', text: 'These games carry no clock data.' }));
   if (tg && tg < t.games) $('clockStats').append(el('p', { class: 'note', text: `Clock figures cover the ${num(tg)} games that recorded move times.` }));
 
@@ -846,9 +1145,13 @@ function renderGames(e, who) {
 
   const DIFF = ['200+ weaker', '100 to 200 weaker', '25 to 100 weaker', 'About equal', '25 to 100 stronger', '100 to 200 stronger', '200+ stronger'];
   const diff = st.ratingDiff.map((b, i) => ({ ...b, name: st.ratingDiff.length === 7 ? DIFF[i] : b.label })).filter((b) => b.games > 0);
-  $('diffRows').replaceChildren(...(diff.length ? diff.map((b) => el('div', { class: 'row wide' },
-    el('span', { class: 'rl', text: b.name, title: b.name }), wdlBar(b),
-    el('span', { class: 'rv' }, `${pct(rate(b))} won`, el('small', { text: plural(b.games, 'game') })))) : [el('p', { class: 'empty', text: 'No rated opponents to compare.' })]),
+  // Like the win-rate heatmap's grey slots: a bucket with fewer than MIN_GAMES games is marked as too few to read much into.
+  $('diffRows').replaceChildren(...(diff.length ? diff.map((b) => {
+    const few = b.games < MIN_GAMES;
+    return el('div', { class: `row wide${few ? ' few' : ''}`, title: few ? `Only ${plural(b.games, 'game')}: not enough to judge.` : null },
+      el('span', { class: 'rl', text: b.name, title: few ? null : b.name }), wdlBar(b),
+      el('span', { class: 'rv' }, `${pct(rate(b))} won`, el('small', { text: few ? `${plural(b.games, 'game')}, not enough to judge` : plural(b.games, 'game') })));
+  }) : [el('p', { class: 'empty', text: 'No rated opponents to compare.' })]),
     diff.length ? el('p', { class: 'note', text: 'Opponents grouped by how their rating compared when the game was played.' }) : null);
 
   const mini = (root, head, rows, empty) => root.replaceChildren(...(rows.length
@@ -856,43 +1159,86 @@ function renderGames(e, who) {
     : [el('tbody', null, el('tr', null, el('td', { class: 'empty', text: empty })))]));
   mini($('openings'), ['Opening', 'Games', 'Won', 'Time'], st.openings.map((o) => el('tr', null,
     el('td', { text: o.name, title: o.name }), el('td', { class: 'num', text: num(o.games) }),
-    el('td', null, wdlBar(o, true), ` ${pct(rate(o))}`), el('td', { class: 'num', text: dur(o.time) }))), 'No opening names in these games.');
+    el('td', null, wdlBar(o, true), ` ${pct(rate(o))}`), el('td', { class: 'num', text: o.time ? dur(o.time) : '–' }))), 'No opening names in these games.');
   mini($('opponents'), ['Opponent', 'Games', 'Won', 'Time'], st.opponents.map((o) => el('tr', null,
-    el('td', null, el('a', { href: `https://www.chess.com/member/${encodeURIComponent(o.username)}`, target: '_blank', rel: 'noopener', text: o.username })),
-    el('td', { class: 'num', text: num(o.games) }), el('td', null, wdlBar(o, true), ` ${pct(rate(o))}`), el('td', { class: 'num', text: dur(o.time) }))), 'Nobody was played more than once in this range.');
+    el('td', null, profileLink(o.username)),
+    el('td', { class: 'num', text: num(o.games) }), el('td', null, wdlBar(o, true), ` ${pct(rate(o))}`), el('td', { class: 'num', text: o.time ? dur(o.time) : '–' }))), 'Nobody was played more than once in this range.');
 }
 
 // ---------- compare ----------
+// One row per player: total time as a bar and time per day (per week on long ranges) as a strip, all on
+// shared scales, so the rows can be read against each other. The table below carries every number.
+function stripValues(e) {
+  const days = e.stats.days;
+  if (days.length <= 200) return days.map((d) => d.time);
+  const out = [];
+  days.forEach((d, i) => { const k = Math.floor(i / 7); out[k] = (out[k] || 0) + d.time; });
+  return out;
+}
+function strip(values, max, label) {
+  const NS = 'http://www.w3.org/2000/svg', n = values.length;
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${n} 24`); svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'cmp-strip'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', label);
+  const w = n > 120 ? 1 : 0.82;
+  values.forEach((v, i) => {
+    if (!(v > 0)) return;
+    const h = Math.max(1, (v / max) * 24), r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', i); r.setAttribute('y', 24 - h); r.setAttribute('width', w); r.setAttribute('height', h); r.setAttribute('class', 'f-time');
+    svg.append(r);
+  });
+  return svg;
+}
 function renderCompare() {
-  const sec = $('secCompare');
+  const sec = $('secCompare'), full = S.users.length >= 4;
+  $('addForm').hidden = full;
+  $('addNote').hidden = !full;
   sec.hidden = S.users.length < 2 || $('results').hidden;
   if (sec.hidden) return;
-  const head = ['Player', 'Time', 'Games', 'Days played', 'On a day played', 'Average game', 'Won', 'Rating', 'Longest session', 'Own share of clock time'];
+  const pick = (i) => { S.focus = i; S.sel = null; S.pool = null; rememberFocus(); writeUrl(); render(); };
+  const ok = S.users.map((u) => store.get(key(u))).filter((e) => e?.state === 'ok');
+  const strips = new Map(ok.map((e) => [e, stripValues(e)]));
+  const maxTotal = maxOf(ok, (e) => e.stats.totals.time, 1), maxStrip = maxOf(ok, (e) => maxOf(strips.get(e)), 1);
+  const weekly = ok.some((e) => e.stats.days.length > 200);
+  swap($('cmpRows'), ...S.users.map((u, i) => {
+    const e = store.get(key(u)), on = i === S.focus;
+    const name = el('button', { type: 'button', class: 'link-btn', text: u, 'data-fk': `cmpv:${key(u)}`, 'aria-pressed': String(on), onclick: () => pick(i) });
+    if (!e || e.state !== 'ok') return el('div', { class: 'row cmp' }, el('span', { class: 'rl' }, name), el('span', { class: 'cmp-vis empty', text: e?.state === 'error' ? e.error : 'Loading…' }), el('span', { class: 'rv' }));
+    const t = e.stats.totals;
+    return el('div', { class: `row cmp${on ? ' on' : ''}` },
+      el('span', { class: 'rl' }, name),
+      el('span', { class: 'cmp-vis' },
+        el('span', { class: 'track' }, t.time > 0 && el('span', { class: 'fill', style: `width:${(t.time / maxTotal) * 100}%` })),
+        strip(strips.get(e), maxStrip, `${u}: time played per ${weekly ? 'week' : 'day'}`)),
+      el('span', { class: 'rv' }, t.time ? dur(t.time) : '–', el('small', { text: plural(t.games, 'game') })));
+  }));
+  $('cmpNote').textContent = `The bar is total time; the strip under it is time per ${weekly ? 'week' : 'day'} across the range. Every row uses the same scales. Pick a name to switch the page to that player.`;
+
+  const head = ['Player', 'Time', 'Games', 'Days played', 'On a day played', 'Average game', 'Won', 'Rating', 'Longest session, breaks included', 'Own share of clock time'];
   const rows = S.users.map((u, i) => {
     const e = store.get(key(u));
-    const pick = () => { S.focus = i; S.sel = null; S.pool = null; if (lastGood) lastGood.focus = i; writeUrl(); render(); scrollTo({ top: 0, behavior: 'auto' }); };
-    const first = el('td', null, el('button', { type: 'button', class: 'link-btn', text: u, onclick: (ev) => { ev.stopPropagation(); pick(); } }));
+    const first = el('td', null, el('button', { type: 'button', class: 'link-btn', text: u, 'data-fk': `cmp:${key(u)}`, onclick: (ev) => { ev.stopPropagation(); pick(i); } }));
     if (!e || e.state === 'loading') return el('tr', null, first, el('td', { colspan: head.length - 1, class: 'empty', text: 'Loading…' }));
     if (e.state === 'error') return el('tr', null, first, el('td', { colspan: head.length - 1, class: 'down', text: e.error }));
     const st = e.stats, t = st.totals, L = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
-    return el('tr', { 'data-click': '1', 'aria-selected': String(i === S.focus), onclick: pick }, first,
-      el('td', { class: 'num', text: dur(t.time) }), el('td', { class: 'num', text: num(t.games) }),
-      el('td', { class: 'num', text: `${t.activeDays} of ${st.range.days}` }), el('td', { class: 'num', text: dur(t.avgPerActiveDay) }),
-      el('td', { class: 'num', text: dur(t.avgGame) }), el('td', { class: 'num', text: pct(rate(t)) }),
-      el('td', { class: `num ${st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : ''}`, text: st.elo.ratedGames ? `${signed(st.elo.net)} (+${num(st.elo.gained)} ${MINUS}${num(st.elo.lost)})` : '–' }),
+    return el('tr', { 'data-click': '1', 'aria-current': i === S.focus ? 'true' : null, onclick: () => pick(i) }, first,
+      el('td', { class: 'num', text: t.time ? dur(t.time) : '–' }), el('td', { class: 'num', text: num(t.games) }),
+      el('td', { class: 'num', text: `${num(t.activeDays)} of ${num(st.range.days)}` }), el('td', { class: 'num', text: t.time ? dur(t.avgPerActiveDay) : '–' }),
+      el('td', { class: 'num', text: t.time ? dur(t.avgGame) : '–' }), el('td', { class: 'num', text: pct(rate(t)) }),
+      el('td', { class: `num ${st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : ''}`, text: st.elo.ratedGames ? `${signed(st.elo.net)} (${gain(st.elo.gained)} ${loss(st.elo.lost)})` : '–' }),
       el('td', { class: 'num', text: L ? dur(L.duration) : '–' }),
       el('td', { class: 'num', text: t.myThink + t.oppThink ? pct(t.myThink / (t.myThink + t.oppThink)) : '–' }));
   });
-  $('compare').replaceChildren(el('thead', null, el('tr', null, ...head.map((h, i) => el('th', { class: i ? 'num' : null, text: h })))), el('tbody', null, ...rows));
+  swap($('compare'), el('thead', null, el('tr', null, ...head.map((h, i) => el('th', { class: i ? 'num' : null, text: h })))), el('tbody', null, ...rows));
 }
 
 // ---------- ledger ----------
 const COLS = [
   { k: 'date', label: 'Date', get: (d) => d.date, show: (d) => dateStr(d.date, dfLong) },
-  { k: 'games', label: 'Games' }, { k: 'time', label: 'Time', show: (d) => (d.games ? dur(d.time) : '–') },
+  { k: 'games', label: 'Games' }, { k: 'time', label: 'Time', show: (d) => (d.liveN ? dur(d.time) : '–') },
   { k: 'wins', label: 'Won' }, { k: 'draws', label: 'Drawn' }, { k: 'losses', label: 'Lost' },
-  { k: 'eloGained', label: 'Rating won', show: (d) => (d.eloGained ? `+${d.eloGained}` : '–'), cls: () => 'up' },
-  { k: 'eloLost', label: 'Rating lost', show: (d) => (d.eloLost ? `${MINUS}${d.eloLost}` : '–'), cls: () => 'down' },
+  { k: 'eloGained', label: 'Rating won', show: (d) => gain(d.eloGained), cls: () => 'up' },
+  { k: 'eloLost', label: 'Rating lost', show: (d) => loss(d.eloLost), cls: () => 'down' },
   { k: 'eloNet', label: 'Net', show: (d) => (d.eloGained || d.eloLost ? signed(d.eloNet) : '–'), cls: (d) => (d.eloNet > 0 ? 'up' : d.eloNet < 0 ? 'down' : '') },
   { k: 'bestWinStreak', label: 'Winning streak' }, { k: 'bestLossStreak', label: 'Losing streak' },
   { k: 'avg', label: 'Average game', get: (d) => (d.liveN ? d.time / d.liveN : 0), show: (d) => (d.liveN ? dur(d.time / d.liveN) : '–') },
@@ -907,16 +1253,20 @@ function renderLedger(e) {
   const col = COLS.find((c) => c.k === S.sort.k) || COLS[0], get = col.get || ((d) => d[col.k]);
   rows.sort((a, b) => { const x = get(a), y = get(b); return (x < y ? -1 : x > y ? 1 : a.date < b.date ? -1 : 1) * S.sort.dir; });
   const head = el('tr', null, ...COLS.map((c) => el('th', { class: c.k === 'date' ? null : 'num', 'aria-sort': S.sort.k === c.k ? (S.sort.dir > 0 ? 'ascending' : 'descending') : null },
-    el('button', { type: 'button', text: c.label, onclick: () => { S.sort = { k: c.k, dir: S.sort.k === c.k ? -S.sort.dir : c.k === 'date' ? 1 : -1 }; renderLedger(e); } }))));
-  const body = rows.map((d) => el('tr', { 'data-click': '1', 'aria-selected': String(S.sel?.mode === 'day' && S.sel.key === d.date), onclick: () => select('day', d.date, true) },
-    ...COLS.map((c) => el('td', { class: c.k === 'date' ? null : `num ${c.cls && (c.show ? c.show(d) !== '–' : true) ? c.cls(d) : ''}`, text: c.show ? c.show(d) : (d.games ? d[c.k] : '–') }))));
-  const foot = el('tr', null, el('td', { text: `${plural(t.activeDays, 'day')} played` }), el('td', { class: 'num', text: num(t.games) }), el('td', { class: 'num', text: dur(t.time) }),
+    el('button', { type: 'button', text: c.label, 'data-fk': `sort:${c.k}`, onclick: () => { S.sort = { k: c.k, dir: S.sort.k === c.k ? -S.sort.dir : c.k === 'date' ? 1 : -1 }; renderLedger(e); } }))));
+  // The whole row opens the day for the mouse; the date is a real button for the keyboard and screen readers.
+  const open = (d, ev) => select('day', d.date, { scroll: true, kb: ev.detail === 0, from: `day:${d.date}` });
+  const body = rows.map((d) => el('tr', { 'data-click': '1', 'aria-current': S.sel?.mode === 'day' && S.sel.key === d.date ? 'true' : null, onclick: (ev) => open(d, ev) },
+    ...COLS.map((c) => c.k === 'date'
+      ? el('td', null, el('button', { type: 'button', class: 'cell-btn', text: c.show(d), 'data-fk': `day:${d.date}`, onclick: (ev) => { ev.stopPropagation(); open(d, ev); } }))
+      : el('td', { class: `num ${c.cls && (c.show ? c.show(d) !== '–' : true) ? c.cls(d) : ''}`, text: c.show ? c.show(d) : (d.games ? num(d[c.k]) : '–') }))));
+  const foot = el('tr', null, el('td', { text: `${plural(t.activeDays, 'day')} played` }), el('td', { class: 'num', text: num(t.games) }), el('td', { class: 'num', text: t.time ? dur(t.time) : '–' }),
     el('td', { class: 'num', text: num(t.wins) }), el('td', { class: 'num', text: num(t.draws) }), el('td', { class: 'num', text: num(t.losses) }),
-    el('td', { class: 'num up', text: `+${num(st.elo.gained)}` }), el('td', { class: 'num down', text: `${MINUS}${num(st.elo.lost)}` }),
-    el('td', { class: `num ${st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : ''}`, text: signed(st.elo.net) }),
-    el('td', { class: 'num', text: String(st.streaks.longestWin?.length || 0) }), el('td', { class: 'num', text: String(st.streaks.longestLoss?.length || 0) }),
+    el('td', { class: 'num up', text: gain(st.elo.gained) }), el('td', { class: 'num down', text: loss(st.elo.lost) }),
+    el('td', { class: `num ${st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : ''}`, text: st.elo.ratedGames ? signed(st.elo.net) : '–' }),
+    el('td', { class: 'num', text: num(st.streaks.longestWin?.length || 0) }), el('td', { class: 'num', text: num(st.streaks.longestLoss?.length || 0) }),
     el('td', { class: 'num', text: dur(t.avgGame) }));
-  $('ledger').replaceChildren(el('thead', null, head), el('tbody', null, ...(body.length ? body : [el('tr', null, el('td', { colspan: COLS.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
+  swap($('ledger'), el('thead', null, head), el('tbody', null, (body.length ? body : [el('tr', null, el('td', { colspan: COLS.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
 }
 function downloadCsv() {
   const e = focusEntry();
@@ -938,19 +1288,41 @@ function submitMain() {
   run();
 }
 $('form').addEventListener('submit', (ev) => { ev.preventDefault(); submitMain(); });
+// After the range changes: a name typed in the box that is not the player on screen is searched for
+// with the new range; otherwise the players on screen are loaded again.
+function rangeChanged() {
+  const typed = cleanName($('user').value);
+  if (typed && key(typed) !== key(S.users[0] || '')) { submitMain(); return; }
+  syncControls(true);
+  if (S.users.length) run(); else writeUrl();
+}
 $('presets').addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-preset]');
   if (!b) return;
-  applyPreset(b.dataset.preset); syncControls();
-  if (S.users.length) run(); else writeUrl();
+  applyPreset(b.dataset.preset);
+  rangeChanged();
 });
 for (const id of ['from', 'to']) $(id).addEventListener('change', () => {
-  const f = $('from').value, t = $('to').value;
+  let f = $('from').value, t = $('to').value;
   if (!t || (!f && S.preset !== 'all')) return;
-  S.preset = null; S.from = f; S.to = t; syncControls();
-  if (f && t && f > t) { showMsg('The start date is after the end date. Swap them or pick a preset.'); return; }
+  f = notAfterToday(f); t = notAfterToday(t);
+  if (f && t && f > t) {
+    // Keep the range that is on screen; the inputs go back to it.
+    showMsg('The start date is after the end date. Swap them or pick a preset.');
+    syncControls(true);
+    return;
+  }
+  S.preset = null; S.from = f; S.to = t;
   showMsg('');
-  if (S.users.length) run(); else writeUrl();
+  rangeChanged();
+});
+// Escape closes an open sticker note, else the open day (the day chart uses a first Escape to hide its readout).
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape' || ev.defaultPrevented) return;
+  hideTip();
+  const note = $('stickerNote'), inClock = document.activeElement?.closest?.('.clock');
+  if (!note.hidden && (inClock || !S.sel)) { closeSticker(); return; }
+  if (S.sel && !$('detail').hidden) closeDetail(true);
 });
 $('addForm').addEventListener('submit', (ev) => {
   ev.preventDefault();
@@ -1001,6 +1373,12 @@ console.info('%canalyzeyou', 'font-weight:800;font-size:16px', '\nReading the so
 readUrl();
 syncTheme();
 syncControls();
+paintLcd($('lcdMe'), 0, false); paintLcd($('lcdOpp'), 0, false);
+// The landing page shows the seven verdicts with their real art and thresholds: a preview, not sample data.
+$('lineup').replaceChildren(...lineup().map((t, i, all) => el('li', null, el('div', { class: 'lineup-art' }, t.art), el('b', { text: t.label }),
+  el('span', { text: i === 0 ? `under ${durWords(all[1].from)} a day` : `${durWords(t.from)} a day or more` }))));
+// The numbers table of the comparison starts open where there is room for it.
+$('cmpMore').open = innerWidth > 900;
 $('ratedOnly').checked = S.rated;
 {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;

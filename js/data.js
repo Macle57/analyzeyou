@@ -7,11 +7,15 @@ const API = 'https://api.chess.com/pub/player/';
 const DB_NAME = 'analyzeyou';
 const DB_STORE = 'months';
 /** Bump when the stored (normalised) game shape changes; old entries are refetched. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 /** The current month (or a month cached before it ended) is reused for this long. */
 const LIVE_TTL_MS = 5 * 60 * 1000;
 /** A month counts as closed once it has been fetched this long after it ended. */
 const CLOSE_MARGIN_MS = 60 * 60 * 1000;
+/** A month that answered 404/410 is treated as empty for this long, then asked for again. */
+const MISSING_TTL_MS = 60 * 60 * 1000;
+/** At most this many months before the seed month are read, one at a time, to find rating baselines. */
+const BASELINE_WALK_MONTHS = 6;
 const CONCURRENCY = 2;
 const MAX_TRIES = 3;
 /** Seconds of wall clock per ply that chess.com does not charge to either clock (lag compensation, move transmission). Measured on real games, see docs/DATA.md. */
@@ -127,7 +131,8 @@ export function openingName(ecoUrl) {
     if (dots >= 0) { if (dots > 0) words.push(tok.slice(0, dots)); break; }
     if (tok) words.push(tok);
   }
-  if (!words.length) return null;
+  // chess.com files games it could not classify under /openings/Undefined; that is no opening name.
+  if (!words.length || (words.length === 1 && /^(undefined|null)$/i.test(words[0]))) return null;
   let name = words.join(' ');
   for (const [re, rep] of NAME_FIXES) name = name.replace(re, rep);
   return name;
@@ -220,26 +225,29 @@ export function normalizeGame(raw, username) {
     clocks.forEach((c, i) => { const s = moverOf(i); left[s] = c; n[s]++; });
     for (const s of ['white', 'black']) used[s] = Math.max(0, base + n[s] * inc - left[s]);
   }
-  if (start == null) start = used ? end - (used.white + used.black) * 1000 : end;
-  if (start > end) start = end;
-  const duration = live ? Math.max(0, Math.round((end - start) / 1000)) : 0;
-
   // Think time: clock-charged time, plus the final think of the side on move.
   let think = null;
+  const flagged = ending === 'timeout' || ending === 'time-vs-insufficient';
   if (live && used) {
     think = { ...used };
-    if (ending === 'timeout' || ending === 'time-vs-insufficient') {
+    if (flagged) {
       // The flagger burned their whole remaining clock.
       const flagger = ending === 'timeout' ? (outcome === 'win' ? oppColor : color) : toMove;
       think[flagger] += left[flagger];
       left[flagger] = 0;
-    } else if (!ENDED_BY_MOVE.has(ending)) {
-      // Resignation, agreement, abandonment, other: the side on move was on the clock.
-      const remainder = duration - used.white - used.black - LAG_PER_PLY * plies;
-      const extra = Math.min(Math.max(0, remainder), left[toMove]);
-      think[toMove] += extra;
-      left[toMove] -= extra;
     }
+  }
+  // Last-resort start: back from the end by all known think time (a flagger's last clock included),
+  // rounded up to whole seconds so think time can never exceed the duration.
+  if (start == null) start = think ? end - Math.ceil(think.white + think.black) * 1000 : end;
+  if (start > end) start = end;
+  const duration = live ? Math.max(0, Math.round((end - start) / 1000)) : 0;
+  if (think && !flagged && !ENDED_BY_MOVE.has(ending)) {
+    // Resignation, agreement, abandonment, other: the side on move was on the clock.
+    const remainder = duration - used.white - used.black - LAG_PER_PLY * plies;
+    const extra = Math.min(Math.max(0, remainder), left[toMove]);
+    think[toMove] += extra;
+    left[toMove] -= extra;
   }
   const r1 = (x) => Math.round(x * 10) / 10;
 
@@ -281,18 +289,33 @@ export function normalizeGame(raw, username) {
  * Sets `ratingDelta` on every game (mutates): my rating minus my rating after the previous
  * rated game of the same pool, ordered by end time. Null for unrated games and for the first
  * known rated game of a pool.
+ * `gaps` lists `[startMs, endMs)` spans whose games are unknown (months that failed to load).
+ * A delta is never taken across a gap: the next rated game of each pool after one gets null.
  */
-export function computeRatingDeltas(games) {
+export function computeRatingDeltas(games, gaps = []) {
   const order = [...games].sort((a, b) => a.end - b.end || a.start - b.start);
-  const last = new Map();
+  const last = new Map(); // pool -> { rating, end }
+  const crossesGap = (from, to) => gaps.some(([s, e]) => from < e && to >= s);
   for (const g of order) {
     g.ratingDelta = null;
     if (!g.rated || g.myRating == null) continue;
     const prev = last.get(g.pool);
-    if (prev != null) g.ratingDelta = g.myRating - prev;
-    last.set(g.pool, g.myRating);
+    if (prev && !crossesGap(prev.end, g.end)) g.ratingDelta = g.myRating - prev.rating;
+    last.set(g.pool, { rating: g.myRating, end: g.end });
   }
   return games;
+}
+
+/** True when `url` is an https link on chess.com or one of its subdomains (safe to use as an href). */
+export function isChessComUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    return u.protocol === 'https:' && (host === 'chess.com' || host.endsWith('.chess.com'));
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------- months
@@ -300,6 +323,8 @@ export function computeRatingDeltas(games) {
 const pad2 = (n) => String(n).padStart(2, '0');
 const utcMonthKey = (ms) => { const d = new Date(ms); return `${d.getUTCFullYear()}/${pad2(d.getUTCMonth() + 1)}`; };
 const monthEndMs = (key) => { const [y, m] = key.split('/').map(Number); return Date.UTC(y, m, 1); };
+const monthStartMs = (key) => { const [y, m] = key.split('/').map(Number); return Date.UTC(y, m - 1, 1); };
+function prevMonthKey(key) { const [y, m] = key.split('/').map(Number); return m === 1 ? `${y - 1}/12` : `${y}/${pad2(m - 1)}`; }
 const monthLabel = (key) => { const [y, m] = key.split('/'); return `${MONTHS[+m - 1]} ${y}`; };
 function nextMonthKey(key) { const [y, m] = key.split('/').map(Number); return m === 12 ? `${y + 1}/01` : `${y}/${pad2(m + 1)}`; }
 function monthsBetween(lo, hi) { const out = []; for (let k = lo; k <= hi; k = nextMonthKey(k)) out.push(k); return out; }
@@ -401,9 +426,16 @@ export async function clearCache() {
 
 // ---------------------------------------------------------------- main entry
 
+/** Runs `worker` over `items`, `limit` at a time. After the first rejection no further item is started. */
 async function pool(items, limit, worker) {
   let next = 0;
-  const run = async () => { while (next < items.length) { const i = next++; await worker(items[i], i); } };
+  let failed = false;
+  const run = async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try { await worker(items[i], i); } catch (err) { failed = true; throw err; }
+    }
+  };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
 }
 
@@ -411,18 +443,40 @@ async function pool(items, limit, worker) {
  * Fetches a player's profile and the games whose start lies in [from, to].
  * @param {string} username
  * @param {{from?: Date|null, to?: Date|null, onProgress?: Function, signal?: AbortSignal,
- *          fetch?: typeof fetch, cache?: boolean, now?: number, retryBaseMs?: number}} [opts]
- *   `fetch` (custom fetch implementation), `cache` (default true), `now` and `retryBaseMs`
- *   (first retry delay, default 800 ms) are for scripts/tests.
+ *          fetch?: typeof fetch, cache?: boolean, cacheStore?: {get: Function, put: Function},
+ *          now?: number, retryBaseMs?: number}} [opts]
+ *   `fetch` (custom fetch implementation), `cache` (default true), `cacheStore` (replaces
+ *   IndexedDB: async `get(key)` / `put(key, value)`), `now` and `retryBaseMs` (first retry
+ *   delay, default 800 ms) are for scripts/tests.
  */
 export async function fetchPlayerGames(username, opts = {}) {
-  const { from = null, to = null, onProgress, signal, cache = true, retryBaseMs = 800 } = opts;
+  const name = validateUsername(username);
+  const outer = opts.signal;
+  if (outer?.aborted) throw abortError();
+  // One controller per call: aborted by the caller's signal, and by this call itself when a month
+  // fails fatally, so requests still in flight and months not yet started stop at once.
+  const inner = new AbortController();
+  const onAbort = () => inner.abort();
+  outer?.addEventListener?.('abort', onAbort, { once: true });
+  try {
+    return await loadPlayer(name, opts, inner.signal);
+  } catch (err) {
+    inner.abort();
+    throw outer?.aborted ? abortError() : err;
+  } finally {
+    outer?.removeEventListener?.('abort', onAbort);
+  }
+}
+
+async function loadPlayer(name, opts, signal) {
+  const { from = null, to = null, cache = true, retryBaseMs = 800 } = opts;
+  const report = opts.onProgress;
+  const onProgress = report ? (p) => { if (!signal.aborted) report(p); } : null;
   const fetchImpl = opts.fetch ?? globalThis.fetch?.bind(globalThis);
   const now = opts.now ?? Date.now();
-  const name = validateUsername(username);
+  const store = opts.cacheStore ?? { get: cacheGet, put: cachePut };
   const lower = name.toLowerCase();
   const warnings = [];
-  if (signal?.aborted) throw abortError();
   if (!fetchImpl) throw new ChessDataError('network', "This browser can't make network requests.");
 
   // Profile
@@ -435,7 +489,7 @@ export async function fetchPlayerGames(username, opts = {}) {
     username: canonicalName(p, lower, name),
     name: p.name ?? null,
     avatar: p.avatar ?? null,
-    url: p.url ?? `https://www.chess.com/member/${lower}`,
+    url: isChessComUrl(p.url) ? p.url : `https://www.chess.com/member/${lower}`,
     country: /\/country\/([A-Za-z]{2})$/.exec(p.country ?? '')?.[1]?.toUpperCase() ?? null,
     joined: Number.isFinite(p.joined) ? p.joined * 1000 : null,
   };
@@ -458,6 +512,7 @@ export async function fetchPlayerGames(username, opts = {}) {
   const lo = from ? utcMonthKey(from.getTime() - 14 * 3600e3) : null;
   let hi = to ? utcMonthKey(to.getTime() + 18 * 3600e3) : currentMonth;
   if (hi > currentMonth) hi = currentMonth;
+  const joinedKey = player.joined ? utcMonthKey(player.joined) : '2007/01';
   let wanted;
   let seed = null;
   let firstArchive = null;
@@ -467,51 +522,99 @@ export async function fetchPlayerGames(username, opts = {}) {
     if (lo != null) seed = available.filter((k) => k < lo).pop() ?? null;
   } else {
     warnings.push("Chess.com didn't return this player's list of monthly archives, so every month in the range was requested directly.");
-    const joinedKey = player.joined ? utcMonthKey(player.joined) : '2007/01';
     const start = lo == null || lo < joinedKey ? joinedKey : lo;
     const end = hi > currentMonth ? currentMonth : hi;
     wanted = start <= end ? monthsBetween(start, end) : [];
-    if (lo != null && lo > joinedKey) {
-      const [y, m] = lo.split('/').map(Number);
-      seed = m === 1 ? `${y - 1}/12` : `${y}/${pad2(m - 1)}`;
-    }
+    if (lo != null && lo > joinedKey) seed = prevMonthKey(lo);
   }
   const toFetch = seed ? [seed, ...wanted] : wanted;
 
   // Fetch months
   const byMonth = new Map();
-  let done = 0;
-  const total = toFetch.length;
-  onProgress?.({ done, total, label: total ? `Loading ${monthLabel(toFetch[0])}` : 'Nothing to load' });
   const failures = [];
+  const ctx = { fetchImpl, signal, cache, store, now, currentMonth, failures, retryBaseMs };
+  let done = 0;
+  let total = toFetch.length;
+  onProgress?.({ done, total, label: total ? `Loading ${monthLabel(toFetch[0])}` : 'Nothing to load' });
   await pool(toFetch, CONCURRENCY, async (key) => {
-    const games = await loadMonth(lower, key, { fetchImpl, signal, cache, now, currentMonth, failures, retryBaseMs });
+    const games = await loadMonth(lower, key, ctx);
+    if (signal.aborted) return;
     byMonth.set(key, games);
     done++;
     onProgress?.({ done, total, label: monthLabel(key) });
   });
-  if (failures.length) {
-    if (failures.length === total) throw failures[0].error;
+  const failed = new Set(failures.map((f) => f.key));
+  const rangeFailed = wanted.filter((k) => failed.has(k));
+  if (rangeFailed.length && rangeFailed.length === wanted.length) {
+    // Every month that can hold games of the range failed; a loaded seed month does not make that a result.
+    throw failures.find((f) => f.key === rangeFailed[0]).error;
+  }
+  if (rangeFailed.length) {
     warnings.push(
-      `Couldn't load ${failures.map((f) => monthLabel(f.key)).join(', ')}; numbers for ${failures.length === 1 ? 'that month' : 'those months'} are missing.`,
+      `Couldn't load ${rangeFailed.map(monthLabel).join(', ')}; numbers for ${rangeFailed.length === 1 ? 'that month' : 'those months'} are missing.`,
     );
+  }
+
+  const fromMs = from ? from.getTime() : -Infinity;
+  const toMs = to ? to.getTime() : Infinity;
+  const inRange = (g) => g.start >= fromMs && g.start <= toMs;
+
+  // Rating baselines: a pool played in the range but not in the seed month has no earlier game to
+  // measure its first delta against. Walk further back, one month at a time and at most
+  // BASELINE_WALK_MONTHS months, until every such pool has a baseline. Skipped when the seed failed.
+  const need = poolsWithoutBaseline(byMonth, inRange);
+  if (need.size && seed && !failed.has(seed)) {
+    const earlier = [];
+    if (available) earlier.push(...available.filter((k) => k < seed).reverse().slice(0, BASELINE_WALK_MONTHS));
+    else for (let k = prevMonthKey(seed); k >= joinedKey && earlier.length < BASELINE_WALK_MONTHS; k = prevMonthKey(k)) earlier.push(k);
+    for (const key of earlier) {
+      total++;
+      onProgress?.({ done, total, label: `Looking for earlier ratings in ${monthLabel(key)}` });
+      const before = failures.length;
+      const games = await loadMonth(lower, key, ctx);
+      if (failures.length > before) break; // nothing before a failed month can be a baseline
+      byMonth.set(key, games);
+      done++;
+      onProgress?.({ done, total, label: monthLabel(key) });
+      for (const g of games) if (g.rated && g.myRating != null) need.delete(g.pool);
+      if (!need.size) break;
+    }
   }
 
   // Merge, rating deltas, filter
   const seen = new Set();
   const all = [];
-  for (const key of toFetch) {
-    for (const g of byMonth.get(key) ?? []) {
+  for (const games of byMonth.values()) {
+    for (const g of games) {
       if (seen.has(g.id)) continue;
       seen.add(g.id);
       all.push({ ...g });
     }
   }
-  computeRatingDeltas(all);
-  const fromMs = from ? from.getTime() : -Infinity;
-  const toMs = to ? to.getTime() : Infinity;
-  const games = all.filter((g) => g.start >= fromMs && g.start <= toMs).sort((a, b) => a.start - b.start || a.end - b.end);
-  return { player, games, firstArchive, warnings };
+  computeRatingDeltas(all, failures.map((f) => [monthStartMs(f.key), monthEndMs(f.key)]));
+  const games = all.filter(inRange).sort((a, b) => a.start - b.start || a.end - b.end);
+
+  // Daily games are filed under the month they end in. One that started in the range but ended after
+  // the last fetched month is not loaded; say so instead of making extra requests.
+  if (hi < currentMonth && wanted.some((k) => byMonth.get(k)?.some((g) => g.timeClass === 'daily'))) {
+    warnings.push(`Daily games that started in this range but ended after ${monthLabel(hi)} are not counted.`);
+  }
+  return { player, games, firstArchive, warnings, failedMonths: rangeFailed.map((k) => k.replace('/', '-')) };
+}
+
+/** Pools whose earliest loaded rated game starts inside the range, so nothing loaded precedes it. */
+function poolsWithoutBaseline(byMonth, inRange) {
+  const first = new Map();
+  for (const games of byMonth.values()) {
+    for (const g of games) {
+      if (!g.rated || g.myRating == null) continue;
+      const f = first.get(g.pool);
+      if (!f || g.end < f.end) first.set(g.pool, g);
+    }
+  }
+  const out = new Set();
+  for (const [pool, g] of first) if (inRange(g)) out.add(pool);
+  return out;
 }
 
 /** Profile `username` is lowercase; the profile URL carries the canonical casing. */
@@ -521,13 +624,18 @@ function canonicalName(p, lower, typed) {
   return p.username ?? typed;
 }
 
-async function loadMonth(user, key, { fetchImpl, signal, cache, now, currentMonth, failures, retryBaseMs }) {
+async function loadMonth(user, key, { fetchImpl, signal, cache, store, now, currentMonth, failures, retryBaseMs }) {
   const cacheKey = `${user}|${key}`;
   if (cache) {
-    const hit = await cacheGet(cacheKey);
+    let hit = null;
+    try { hit = await store.get(cacheKey); } catch { /* treat as a miss */ }
     if (hit && hit.v === SCHEMA_VERSION && Array.isArray(hit.games)) {
-      const closed = key < currentMonth && hit.fetchedAt >= monthEndMs(key) + CLOSE_MARGIN_MS;
-      if (closed || now - hit.fetchedAt < LIVE_TTL_MS) return hit.games;
+      if (hit.missing) {
+        if (now - hit.fetchedAt < MISSING_TTL_MS) return hit.games;
+      } else {
+        const closed = key < currentMonth && hit.fetchedAt >= monthEndMs(key) + CLOSE_MARGIN_MS;
+        if (closed || now - hit.fetchedAt < LIVE_TTL_MS) return hit.games;
+      }
     }
   }
   let res;
@@ -544,6 +652,12 @@ async function loadMonth(user, key, { fetchImpl, signal, cache, now, currentMont
     const g = normalizeGame(r, user);
     if (g) games.push(g);
   }
-  if (cache) await cachePut(cacheKey, { v: SCHEMA_VERSION, fetchedAt: now, games });
+  // A 404/410 can be a stale CDN answer for a month that does have games, so it is only kept for
+  // MISSING_TTL_MS and never as a closed month.
+  const entry = { v: SCHEMA_VERSION, fetchedAt: now, games };
+  if (res.data == null) entry.missing = true;
+  if (cache) {
+    try { await store.put(cacheKey, entry); } catch { /* caching is best effort */ }
+  }
   return games;
 }

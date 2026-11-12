@@ -39,17 +39,74 @@ export function showTip(x, y, content) {
   t.style.top = top + 'px';
 }
 export function hideTip() { tipEl().hidden = true; }
+/** Shows the tooltip next to an element (keyboard focus has no pointer position). */
+export function showTipAt(node, content) {
+  const r = node.getBoundingClientRect();
+  showTip(r.left + r.width / 2, r.bottom - 4, content);
+}
+/** True for a finger or a pen: no hover, so a tap shows the tooltip and it stays until the next tap or a scroll. */
+export const isTouch = (e) => e.pointerType != null && e.pointerType !== 'mouse';
 
-// Hover tooltips for plain HTML marks: put data on the node with setTip(node, fn).
+// Tooltips for plain HTML marks: put data on the node with setTip(node, fn). Hover shows it, so does
+// keyboard focus, and so does a tap on a touch screen.
 const tipFns = new WeakMap();
 export function setTip(node, fn) { tipFns.set(node, fn); node.dataset.tip = '1'; }
-document.addEventListener('pointermove', (e) => {
-  const n = e.target.closest?.('[data-tip]');
-  if (n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
-  else if (!e.target.closest?.('svg[data-chart]')) hideTip();
-});
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('[data-tip], svg[data-chart]')) hideTip(); });
-addEventListener('scroll', hideTip, { passive: true });
+if (typeof document !== 'undefined' && typeof addEventListener === 'function') { // absent when tests import this in Node
+  document.addEventListener('pointermove', (e) => {
+    if (isTouch(e)) return; // a finger that moves is scrolling, and the scroll hides the tooltip
+    const n = e.target.closest?.('[data-tip]');
+    if (n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
+    else if (!e.target.closest?.('svg[data-chart]')) hideTip();
+  });
+  document.addEventListener('pointerdown', (e) => {
+    const n = e.target.closest?.('[data-tip]');
+    if (isTouch(e) && n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
+    else if (!e.target.closest?.('[data-tip], svg[data-chart]')) hideTip();
+  });
+  let focusTip = null; // the mark whose tooltip keyboard focus opened; losing focus hides only that one
+  document.addEventListener('focusin', (e) => {
+    const n = e.target;
+    if (n?.dataset?.tip && tipFns.has(n) && n.matches(':focus-visible')) { showTipAt(n, tipFns.get(n)()); focusTip = n; }
+    else focusTip = null;
+  });
+  document.addEventListener('focusout', (e) => { if (e.target === focusTip) { focusTip = null; hideTip(); } });
+  addEventListener('scroll', hideTip, { passive: true });
+}
+
+// ---------- array helpers (loops: spreading 100k+ values into Math.min/max throws RangeError) ----------
+/** Largest `f(x)` over `arr`, at least `floor`. */
+export function maxOf(arr, f = (x) => x, floor = -Infinity) {
+  let m = floor;
+  for (let i = 0; i < arr.length; i++) { const v = f(arr[i]); if (v > m) m = v; }
+  return m;
+}
+/** Smallest `f(x)` over `arr`, at most `ceil`. */
+export function minOf(arr, f = (x) => x, ceil = Infinity) {
+  let m = ceil;
+  for (let i = 0; i < arr.length; i++) { const v = f(arr[i]); if (v < m) m = v; }
+  return m;
+}
+/**
+ * Thins a line for drawing: above `limit` points, splits them into buckets and keeps each bucket's
+ * lowest and highest point (in their original order), so peaks and dips survive. Always keeps the
+ * first and last point. Returns the input unchanged when it is short enough.
+ */
+export function thinLine(pts, limit = 2400) {
+  const n = pts.length;
+  if (n <= limit) return pts;
+  const size = Math.ceil(n / Math.floor(limit / 2));
+  const out = [pts[0]];
+  for (let s = 1; s < n - 1; s += size) {
+    const e = Math.min(n - 1, s + size);
+    let lo = s, hi = s;
+    for (let i = s + 1; i < e; i++) { if (pts[i].v < pts[lo].v) lo = i; if (pts[i].v > pts[hi].v) hi = i; }
+    if (lo === hi) out.push(pts[lo]);
+    else if (lo < hi) out.push(pts[lo], pts[hi]);
+    else out.push(pts[hi], pts[lo]);
+  }
+  out.push(pts[n - 1]);
+  return out;
+}
 
 // ---------- scales ----------
 export function niceMax(max, target = 4) {
@@ -94,14 +151,16 @@ function pickTicks(n, maxLabels) {
 
 // ---------- day chart: time columns above, rating won/lost below, one shared x ----------
 export function dayChart(root, buckets, o) {
-  root.replaceChildren();
+  // A re-render while the chart has focus puts the focus on the new chart.
+  const hadFocus = root.contains(document.activeElement);
   const n = buckets.length;
-  if (!n) return;
+  if (!n) { root.replaceChildren(); return; }
   const W = Math.max(280, Math.floor(root.clientWidth));
   const small = W < 520;
   const showElo = buckets.some((b) => b.eloGained || b.eloLost);
+  const showTime = o.showTime !== false; // false when nothing in the range has time at the board (daily games only)
   const m = { l: 44, r: 6, t: 24, b: 24 };
-  const h1 = small ? 150 : 210, gap = 54, h2 = showElo ? (small ? 96 : 120) : 0;
+  const h1 = showTime ? (small ? 150 : 210) : 0, gap = showTime ? 54 : 20, h2 = showElo ? (small ? 96 : 120) : 0;
   const H = m.t + h1 + (showElo ? gap + h2 : 0) + m.b;
   const iw = W - m.l - m.r, band = iw / n;
   const bw = Math.max(1, Math.min(24, band >= 8 ? band - 2 : band >= 4 ? band - 1 : band));
@@ -109,10 +168,10 @@ export function dayChart(root, buckets, o) {
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'group', 'aria-label': o.label, 'data-chart': 'day' });
 
   // time panel
-  const ts = timeScale(Math.max(60, ...buckets.map((b) => b.time)));
+  const ts = timeScale(maxOf(buckets, (b) => b.time, 60));
   const y1 = (v) => m.t + h1 - (v / ts.max) * h1;
-  svg.append(S('text', { x: 0, y: 12, class: 'cap' }, 'Time played'));
-  for (const v of ts.ticks) {
+  if (showTime) svg.append(S('text', { x: 0, y: 12, class: 'cap' }, 'Time played'));
+  if (showTime) for (const v of ts.ticks) {
     svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y1(v), y2: y1(v), class: v ? 'grid' : 'base' }));
     svg.append(S('text', { x: m.l - 8, y: y1(v) + 4, 'text-anchor': 'end', class: 'tick' }, timeTick(v)));
   }
@@ -136,7 +195,7 @@ export function dayChart(root, buckets, o) {
       acc += s.v;
     });
   });
-  if (buckets[maxI].time > 0) {
+  if (showTime && buckets[maxI].time > 0) {
     const x = Math.min(W - m.r - 30, Math.max(m.l + 30, bx(maxI) + bw / 2));
     svg.append(S('text', { x, y: y1(buckets[maxI].time) - 6, 'text-anchor': 'middle', class: 'lab' }, o.fmtTime(buckets[maxI].time)));
   }
@@ -144,15 +203,16 @@ export function dayChart(root, buckets, o) {
   // rating panel
   if (showElo) {
     const y0 = m.t + h1 + gap;
-    const up = niceMax(Math.max(1, ...buckets.map((b) => b.eloGained)), 2);
-    const dn = niceMax(Math.max(1, ...buckets.map((b) => b.eloLost)), 2);
-    const step = Math.max(up.step, dn.step);
-    const upMax = Math.ceil(up.max / step) * step, dnMax = Math.ceil(dn.max / step) * step;
+    // Each side is as tall as its own data needs (plus a little air); gridlines sit at round values inside
+    // that. Rounding both sides up to a shared step used to leave half the panel empty.
+    const upMax = Math.max(1, maxOf(buckets, (b) => b.eloGained, 0) * 1.08);
+    const dnMax = Math.max(1, maxOf(buckets, (b) => b.eloLost, 0) * 1.08);
+    const step = niceMax(upMax + dnMax, 4).step;
     const y2 = (v) => y0 + ((upMax - v) / (upMax + dnMax)) * h2;
     svg.append(S('text', { x: 0, y: y0 - 16, class: 'cap' }, 'Rating won and lost'));
-    for (let v = -dnMax; v <= upMax + 1e-9; v += step) {
+    for (let v = -Math.floor(dnMax / step) * step; v <= upMax + 1e-9; v += step) {
       svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y2(v), y2: y2(v), class: v ? 'grid' : 'base' }));
-      svg.append(S('text', { x: m.l - 8, y: y2(v) + 4, 'text-anchor': 'end', class: 'tick' }, (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v)));
+      svg.append(S('text', { x: m.l - 8, y: y2(v) + 4, 'text-anchor': 'end', class: 'tick' }, (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString()));
     }
     buckets.forEach((b, i) => {
       if (b.eloGained > 0) {
@@ -171,7 +231,7 @@ export function dayChart(root, buckets, o) {
 
   // x labels
   const yx = H - 6;
-  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (small ? 64 : 84))))) {
+  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (o.tickWidth || (small ? 64 : 84)))))) {
     const x = m.l + i * band + band / 2;
     const anchor = x < m.l + 24 ? 'start' : x > W - m.r - 24 ? 'end' : 'middle';
     svg.append(S('text', { x: anchor === 'start' ? m.l : anchor === 'end' ? W - m.r : x, y: yx, 'text-anchor': anchor, class: 'tick' }, o.tick(buckets[i])));
@@ -180,7 +240,8 @@ export function dayChart(root, buckets, o) {
   // interaction
   const hit = S('rect', { x: m.l, y: 0, width: iw, height: H, fill: 'transparent', style: 'cursor:pointer' });
   svg.append(hit);
-  let cur = -1;
+  // `cur` is the bar the keyboard is on; it survives a re-render through o.cursorKey.
+  let cur = o.cursorKey != null ? buckets.findIndex((b) => b.key === o.cursorKey) : -1;
   const place = (rect, i) => { rect.setAttribute('x', m.l + i * band); rect.setAttribute('visibility', 'visible'); };
   const selI = buckets.findIndex((b) => b.key === o.selectedKey);
   if (selI >= 0) place(selBand, selI);
@@ -189,28 +250,35 @@ export function dayChart(root, buckets, o) {
     const x = ((e.clientX - r.left) / r.width) * W;
     return Math.max(0, Math.min(n - 1, Math.floor((x - m.l) / band)));
   };
+  let shown = false; // whether the hover band and tooltip are up
   const hover = (i, cx, cy) => {
-    cur = i; place(hovBand, i);
+    cur = i; shown = true; place(hovBand, i);
+    o.onCursor?.(buckets[i]);
     if (cx == null) {
       const r = svg.getBoundingClientRect();
       cx = r.left + ((m.l + i * band + band / 2) / W) * r.width; cy = r.top + 40;
+      o.announce?.(buckets[i]); // keyboard: the tooltip alone says nothing to a screen reader
     }
     showTip(cx, cy, o.tip(buckets[i]));
   };
-  const leave = () => { cur = -1; hovBand.setAttribute('visibility', 'hidden'); hideTip(); };
-  hit.addEventListener('pointermove', (e) => hover(idxAt(e), e.clientX, e.clientY));
-  hit.addEventListener('pointerleave', leave);
-  hit.addEventListener('click', (e) => o.onSelect(buckets[idxAt(e)]));
+  const leave = () => { shown = false; hovBand.setAttribute('visibility', 'hidden'); hideTip(); };
+  // Touch has no hover: a tap is a click and opens the bar, so the pointer events below are for the mouse.
+  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) hover(idxAt(e), e.clientX, e.clientY); });
+  hit.addEventListener('pointerleave', (e) => { if (!isTouch(e)) { leave(); cur = -1; } });
+  hit.addEventListener('click', (e) => o.onSelect(buckets[idxAt(e)], false));
   svg.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') {
       e.preventDefault();
-      const from = cur >= 0 ? cur : selI >= 0 ? selI : e.key === 'ArrowLeft' ? n : -1;
-      hover(Math.max(0, Math.min(n - 1, from + (e.key === 'ArrowLeft' ? -1 : 1))));
-    } else if ((e.key === 'Enter' || e.key === ' ') && cur >= 0) { e.preventDefault(); o.onSelect(buckets[cur]); }
-    else if (e.key === 'Escape') leave();
+      const from = cur >= 0 ? cur : selI >= 0 ? selI : k === 'ArrowLeft' ? n : -1;
+      const to = k === 'Home' ? 0 : k === 'End' ? n - 1 : from + (k === 'ArrowLeft' ? -1 : 1);
+      hover(Math.max(0, Math.min(n - 1, to)));
+    } else if ((k === 'Enter' || k === ' ') && cur >= 0) { e.preventDefault(); o.onSelect(buckets[cur], true); }
+    else if (k === 'Escape' && shown) { e.stopPropagation(); leave(); } // the next Escape reaches the page and closes the open day
   });
   svg.addEventListener('blur', leave);
-  root.append(svg);
+  root.replaceChildren(svg);
+  if (hadFocus) svg.focus({ preventScroll: true });
 }
 
 // ---------- line chart (rating over time) ----------
@@ -218,11 +286,11 @@ export function lineChart(root, pts, o) {
   root.replaceChildren();
   if (!pts.length) return;
   const W = Math.max(280, Math.floor(root.clientWidth));
-  const m = { l: 44, r: 56, t: 18, b: 24 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
+  const m = { l: 44, r: 56, t: 18, b: 26 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
   const iw = W - m.l - m.r;
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'line' });
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-  let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  let lo = minOf(pts, (p) => p.v), hi = maxOf(pts, (p) => p.v);
   if (o.start != null) { lo = Math.min(lo, o.start); hi = Math.max(hi, o.start); }
   const span = Math.max(10, hi - lo);
   const step = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((s) => span / s <= 4.5) || 1000;
@@ -233,14 +301,25 @@ export function lineChart(root, pts, o) {
     svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v === yLo ? 'base' : 'grid' }));
     svg.append(S('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, v));
   }
-  const nT = Math.max(2, Math.floor(iw / 110));
-  if (t1 > t0) for (let i = 0; i < nT; i++) {
-    const t = t0 + ((t1 - t0) * i) / (nT - 1);
-    svg.append(S('text', { x: x(t), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === nT - 1 ? 'end' : 'middle', class: 'tick' }, o.fmtX(t)));
-  } else svg.append(S('text', { x: x(t0), y: H - 6, 'text-anchor': 'middle', class: 'tick' }, o.fmtX(t0)));
+  // x labels. o.ticks are candidates in order ({ t, label }); a label is drawn where it sits, with a small
+  // mark on the axis, only if it does not run into the one before it, and never twice.
+  const seen = new Set();
+  let lastRight = -Infinity;
+  for (const k of o.ticks || []) {
+    if (seen.has(k.label)) continue;
+    const px = x(k.t), w = k.label.length * 6.3;
+    const anchor = px - w / 2 < m.l ? 'start' : px + w / 2 > m.l + iw + 20 ? 'end' : 'middle';
+    const left = anchor === 'start' ? px : anchor === 'end' ? px - w : px - w / 2;
+    if (left < lastRight + 12) continue;
+    lastRight = left + w; seen.add(k.label);
+    svg.append(S('line', { x1: px, x2: px, y1: m.t + h, y2: m.t + h + 4, class: 'base' }));
+    svg.append(S('text', { x: px, y: H - 5, 'text-anchor': anchor, class: 'tick' }, k.label));
+  }
 
-  let d = '';
-  pts.forEach((p, i) => { d += (i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1); });
+  // The path is drawn from a thinned copy; the peak, last point and tooltips use every real point.
+  const parts = [];
+  thinLine(pts).forEach((p, i) => { parts.push((i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1)); });
+  const d = parts.join('');
   svg.append(S('path', { d, class: 's-time', fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   const last = pts[pts.length - 1];
   let peak = pts[0];
@@ -257,7 +336,7 @@ export function lineChart(root, pts, o) {
   const cdot = S('circle', { r: 4.5, class: 'f-ink ring', visibility: 'hidden' });
   const hit = S('rect', { x: m.l, y: 0, width: iw + 8, height: H, fill: 'transparent' });
   svg.append(cross, cdot, hit);
-  hit.addEventListener('pointermove', (e) => {
+  const point = (e) => {
     const r = svg.getBoundingClientRect();
     const px = ((e.clientX - r.left) / r.width) * W;
     const t = t1 === t0 ? t0 : t0 + ((px - m.l) / iw) * (t1 - t0);
@@ -267,8 +346,10 @@ export function lineChart(root, pts, o) {
     cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.setAttribute('visibility', 'visible');
     cdot.setAttribute('cx', x(p.t)); cdot.setAttribute('cy', y(p.v)); cdot.setAttribute('visibility', 'visible');
     showTip(e.clientX, e.clientY, o.tip(p));
-  });
-  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); cdot.setAttribute('visibility', 'hidden'); hideTip(); });
+  };
+  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) point(e); });
+  hit.addEventListener('pointerdown', (e) => { if (isTouch(e)) point(e); }); // a tap pins the readout
+  hit.addEventListener('pointerleave', (e) => { if (isTouch(e)) return; cross.setAttribute('visibility', 'hidden'); cdot.setAttribute('visibility', 'hidden'); hideTip(); });
   root.append(svg);
 }
 
@@ -280,7 +361,7 @@ export function colChart(root, items, o) {
   const m = { l: 40, r: 6, t: 14, b: 24 }, h = 170, H = m.t + h + m.b;
   const iw = W - m.l - m.r, n = items.length, band = iw / n, bw = Math.max(2, Math.min(24, band - 2));
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'col' });
-  const sc = o.max ? { max: o.max, step: o.step } : niceMax(Math.max(...items.map((d) => d.value || 0)), 4);
+  const sc = o.max ? { max: o.max, step: o.step } : niceMax(maxOf(items, (d) => d.value || 0, 0), 4);
   const y = (v) => m.t + h - (v / sc.max) * h;
   for (let v = 0; v <= sc.max + 1e-9; v += sc.step) {
     svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v ? 'grid' : 'base' }));
@@ -296,8 +377,9 @@ export function colChart(root, items, o) {
     }
     if (i % every === 0) svg.append(S('text', { x: m.l + i * band + band / 2, y: H - 6, 'text-anchor': 'middle', class: 'tick' }, d.label));
     const hitR = S('rect', { x: m.l + i * band, y: m.t, width: band, height: h, fill: 'transparent' });
-    hitR.addEventListener('pointermove', (e) => showTip(e.clientX, e.clientY, d.tip()));
-    hitR.addEventListener('pointerleave', hideTip);
+    hitR.addEventListener('pointermove', (e) => { if (!isTouch(e)) showTip(e.clientX, e.clientY, d.tip()); });
+    hitR.addEventListener('pointerdown', (e) => { if (isTouch(e)) showTip(e.clientX, e.clientY, d.tip()); });
+    hitR.addEventListener('pointerleave', (e) => { if (!isTouch(e)) hideTip(); });
     svg.append(hitR);
   });
   root.append(svg);
