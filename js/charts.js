@@ -181,8 +181,9 @@ export function niceMax(max, target = 4) {
 const TIME_STEPS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 28800, 43200, 86400, 172800, 345600, 864000];
 export function timeTick(v) {
   if (v === 0) return '0';
-  if (v < 3600) return Math.round(v / 60) + 'm';
-  const h = Math.floor(v / 3600), m = Math.round((v % 3600) / 60);
+  v = Math.round(v / 60) * 60; // whole minutes first, so 59m 40s carries into "1h", never "60m"
+  if (v < 3600) return v / 60 + 'm';
+  const h = Math.floor(v / 3600), m = (v % 3600) / 60;
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 function timeScale(max) {
@@ -247,7 +248,7 @@ export function durLabel(s) {
   if (s === 0) return '0';
   if (s < 60) return `${s}s`;
   if (s < 3600) { const m = Math.floor(s / 60), r = s % 60; return r ? `${m}m ${r}s` : `${m}m`; }
-  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  const mins = Math.round(s / 60), h = Math.floor(mins / 60), m = mins % 60; // 1h 59m 40s carries into "2h"
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 const LABEL_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400];
@@ -264,6 +265,14 @@ export function histTicks(bins, maxLabels) {
   const pick = (step) => bins.map((b, i) => ({ i, b })).filter(({ b }) => b.from % step === 0);
   let at = pick(steps[steps.length - 1]);
   for (const step of steps) { const p = pick(step); if (p.length <= Math.max(1, maxLabels)) { at = p; break; } }
+  // The open tail bar always carries its "7m+", even when its edge is not on the step: the regular
+  // labels that would crowd it (closer than the room one label gets) give way.
+  const last = bins.length - 1;
+  if (bins[last].to == null && at.at(-1)?.i !== last) {
+    const room = Math.ceil(bins.length / Math.max(1, maxLabels));
+    while (at.length && (last - at.at(-1).i < room || at.length >= Math.max(1, maxLabels))) at.pop();
+    at.push({ i: last, b: bins[last] });
+  }
   return at.map(({ i, b }) => ({ i, label: b.to == null ? `${durLabel(b.from)}+` : durLabel(b.from) }));
 }
 
@@ -296,6 +305,30 @@ export function dayChart(root, buckets, o) {
   const selBand = S('rect', { class: 'sel-band', y: m.t - 4, height: H - m.t - m.b + 4, width: band, visibility: 'hidden' });
   const hovBand = S('rect', { class: 'hover-band', y: m.t - 4, height: H - m.t - m.b + 4, width: band, visibility: 'hidden' });
   svg.append(selBand, hovBand);
+
+  // Buckets with days from a month that failed to load (b.missing > 0) carry a hatched band, and each
+  // run of them a "not loaded" label where it fits: blank there means unknown, not "no games".
+  if (buckets.some((b) => b.missing)) {
+    svg.append(S('defs', {}, S('pattern', { id: 'missing-hatch', patternUnits: 'userSpaceOnUse', width: 6, height: 6, patternTransform: 'rotate(45)' },
+      S('rect', { width: 1.5, height: 6, class: 'hatch-line' }))));
+    for (let i = 0; i < n;) {
+      if (!buckets[i].missing) { i++; continue; }
+      let j = i;
+      while (j + 1 < n && buckets[j + 1].missing) j++;
+      const x = m.l + i * band, w = (j - i + 1) * band;
+      // One band per panel, so the gap between them (where the second panel's caption sits) stays clear.
+      const panels = [...(showTime ? [[m.t - 4, h1 + 4]] : []), ...(showElo ? [[m.t + h1 + gap, h2]] : [])];
+      for (const [py, ph] of panels) svg.append(S('rect', { x, y: py, width: w, height: ph, fill: 'url(#missing-hatch)', class: 'missing-band' }));
+      // The label sits on a plain patch of the surface so the hatch never runs through its letters.
+      const tw = textWidth('not loaded') + 16;
+      if (w >= tw + 6 && panels.length) {
+        const ly = panels[0][0] + 8;
+        svg.append(S('rect', { x: x + w / 2 - tw / 2, y: ly, width: tw, height: 20, rx: 10, class: 'missing-pill' }));
+        svg.append(S('text', { x: x + w / 2, y: ly + 14, 'text-anchor': 'middle', class: 'cap missing-lab' }, 'not loaded'));
+      }
+      i = j + 1;
+    }
+  }
 
   let maxI = 0;
   buckets.forEach((b, i) => {
@@ -486,9 +519,10 @@ export function colChart(root, items, o) {
   if (o.ref != null) svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(o.ref), y2: y(o.ref), class: 'ref' }));
   const maxLabels = Math.max(1, Math.floor(iw / (o.labelWidth || 34)));
   // o.ticks(maxLabels) -> [{ i, label }] picks the labels (the histogram labels round edges only);
-  // otherwise every k-th bar is labelled with its own label.
-  const every = Math.ceil(n / maxLabels);
-  const ticks = o.ticks ? o.ticks(maxLabels) : items.map((d, i) => ({ i, label: d.label })).filter(({ i }) => i % every === 0);
+  // otherwise bars are labelled at an even step counted back from the last one, so the last bar
+  // ("10+") always has its label.
+  const ticks = o.ticks ? o.ticks(maxLabels) : null;
+  const centred = ticks ? null : evenTicks(n, m.l, W - m.r, (i) => textWidth(items[i].label));
   const hov = S('rect', { class: 'hover-band', y: m.t - 4, height: h + 4, width: band, visibility: 'hidden' });
   svg.append(hov);
   items.forEach((d, i) => {
@@ -514,8 +548,9 @@ export function colChart(root, items, o) {
     }
   });
   // A bar's label sits under its left edge: the histogram's labels are bin edges, and so are the bars'.
-  for (const t of ticks) {
-    const lx = o.ticks ? m.l + t.i * band : m.l + t.i * band + band / 2, w = textWidth(t.label);
+  if (centred) for (const t of centred) svg.append(S('text', { x: t.x, y: H - 6, 'text-anchor': t.anchor, class: 'tick' }, items[t.i].label));
+  else for (const t of ticks) {
+    const lx = m.l + t.i * band, w = textWidth(t.label);
     const anchor = lx - w / 2 < m.l - 30 ? 'start' : lx + w / 2 > W ? 'end' : 'middle';
     svg.append(S('text', { x: anchor === 'end' ? W : lx, y: H - 6, 'text-anchor': anchor, class: 'tick' }, t.label));
   }

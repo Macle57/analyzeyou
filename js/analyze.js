@@ -33,11 +33,13 @@ const withRate = (o) => ({ ...o, winRate: rate(o.wins, o.games) });
 
 /**
  * @param {object[]} games normalised games, sorted by start ascending
- * @param {{from?: Date|null, to?: Date|null, sessionGapMinutes?: number, now?: number}} [opts]
+ * @param {{from?: Date|null, to?: Date|null, sessionGapMinutes?: number, now?: number, gaps?: number[][]}} [opts]
+ *   `gaps` lists `[startMs, endMs)` spans whose games are unknown (months that failed to load); every
+ *   day that overlaps one gets `missing: true`.
  */
 export function analyze(games, opts = {}) {
   games = Array.isArray(games) ? games : [];
-  const { from = null, to = null, sessionGapMinutes = 30, now = Date.now() } = opts;
+  const { from = null, to = null, sessionGapMinutes = 30, now = Date.now(), gaps = [] } = opts;
   const N = games.length;
   const gapMs = sessionGapMinutes * 60000;
 
@@ -62,8 +64,9 @@ export function analyze(games, opts = {}) {
   const dayIndex = new Map();
   for (let d = parseDay(fromKey), k = fromKey; k <= toKey; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), k = dayKey(d)) {
     dayIndex.set(k, days.length);
+    const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
     days.push({
-      date: k, dow: dowOf(d),
+      date: k, dow: dowOf(d), missing: gaps.some(([s, e]) => d.getTime() < e && next > s),
       games: 0, wins: 0, losses: 0, draws: 0,
       time: 0, myThink: 0, oppThink: 0,
       eloGained: 0, eloLost: 0, eloNet: 0, eloByPool: {},
@@ -305,6 +308,9 @@ export function analyze(games, opts = {}) {
     avgDuration: sessionList.length ? sessDur.reduce((a, b) => a + b, 0) / sessionList.length : null,
     avgGames: sessionList.length ? sessionList.reduce((a, s) => a + s.games, 0) / sessionList.length : null,
     medianDuration: median(sessDur),
+    // Sessions touching a day, averaged over the days with a live game: at least 1 whenever there is
+    // play, unlike count / liveDays, which counts a session across midnight once but both its days.
+    perDay: totals.liveDays ? days.reduce((a, d) => a + d.sessions, 0) / totals.liveDays : null,
     list: sessionList,
     longest: longestSession,
     byPosition: posBuckets.map((b) => ({ label: b.label, games: b.games, wins: b.wins, losses: b.losses, draws: b.draws, winRate: rate(b.wins, b.games), eloNet: b.eloNet })),
@@ -322,8 +328,8 @@ export function analyze(games, opts = {}) {
 
   // ---------------------------------------------------------- streaks
   const streaks = {
-    longestWin: { length: 0, start: null, end: null, startIdx: null, endIdx: null },
-    longestLoss: { length: 0, start: null, end: null, startIdx: null, endIdx: null },
+    longestWin: { length: 0, start: null, end: null, startIdx: null, endIdx: null, opponents: 0 },
+    longestLoss: { length: 0, start: null, end: null, startIdx: null, endIdx: null, opponents: 0 },
     current: { type: null, length: 0 },
     longestDayStreak: { length: 0, startDate: null, endDate: null },
     currentDayStreak: 0,
@@ -335,8 +341,15 @@ export function analyze(games, opts = {}) {
       if (o === runType) runLen++; else { runType = o; runLen = 1; runStart = i; }
       const key = o === 'win' ? 'longestWin' : o === 'loss' ? 'longestLoss' : null;
       if (key && runLen > streaks[key].length) {
-        streaks[key] = { length: runLen, start: games[runStart].start, end: games[i].end, startIdx: runStart, endIdx: i };
+        streaks[key] = { length: runLen, start: games[runStart].start, end: games[i].end, startIdx: runStart, endIdx: i, opponents: 0 };
       }
+    }
+    // Distinct opponents inside each longest streak: twenty wins can be against one person.
+    for (const s of [streaks.longestWin, streaks.longestLoss]) {
+      if (!s.length) continue;
+      const who = new Set();
+      for (let i = s.startIdx; i <= s.endIdx; i++) who.add(String(games[i].opponent ?? `?${i}`).toLowerCase());
+      s.opponents = who.size;
     }
     if (N) streaks.current = { type: runType, length: runLen };
 

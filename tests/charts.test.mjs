@@ -131,13 +131,18 @@ test('histTicks label exact edges at an even step, never twice', () => {
           const b = bins[x.i];
           assert.equal(x.label, b.to == null ? `${durLabel(b.from)}+` : durLabel(b.from), 'label is the bin edge');
         }
-        const gaps = new Set(t.slice(1).map((x, k) => bins[x.i].from - bins[t[k].i].from));
+        // The open tail bar always carries its label; the regular labels before it keep one even step.
+        assert.equal(t.at(-1).i, bins.length - 1, `tail labelled: ${labels}`);
+        const reg = t.filter((x) => bins[x.i].to != null);
+        const gaps = new Set(reg.slice(1).map((x, k) => bins[x.i].from - bins[reg[k].i].from));
         assert.ok(gaps.size <= 1, `even step: ${[...gaps]}`);
       }
     }
   }
-  // 30 s bins, room for 6 labels: whole minutes.
-  assert.deepEqual(histTicks(make(30, 14, true), 6).map((x) => x.label), ['0', '2m', '4m', '6m']);
+  // 30 s bins, room for 6 labels: whole minutes, and "6m" gives way to the tail's "7m+".
+  assert.deepEqual(histTicks(make(30, 14, true), 6).map((x) => x.label), ['0', '2m', '4m', '7m+']);
+  // A tail far from the last step edge keeps every regular label.
+  assert.deepEqual(histTicks(make(60, 9, true), 5).map((x) => x.label), ['0', '2m', '4m', '6m', '9m+']);
   assert.deepEqual(histTicks(make(30, 14, true), 9).map((x) => x.label), ['0', '1m', '2m', '3m', '4m', '5m', '6m', '7m+']);
 });
 

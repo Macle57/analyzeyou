@@ -73,6 +73,7 @@
       </div>
     </div>
     <p class="sr-only" id="clockSr" aria-live="polite"></p>
+    <p class="clock-gap" id="clockGap" hidden></p>
     <div class="stickers" id="stickers" hidden></div>
     <p class="sticker-note" id="stickerNote" aria-live="polite" hidden></p>
 
@@ -280,7 +281,7 @@
 </main>
 
 <footer class="foot">
-  <p>Reads public data from the <a href="https://www.chess.com/news/view/published-data-api" rel="noopener">chess.com published-data API</a>, in your browser. Not affiliated with chess.com. Days and hours use your device's time zone<span id="tzNote"></span>.</p>
+  <p>Reads public data from the <a href="https://www.chess.com/news/view/published-data-api" rel="noopener">chess.com published-data API</a> in your browser. Not affiliated with chess.com. Days and hours use your device's time zone<span id="tzNote"></span>.</p>
   <p><a href="https://github.com/Macle57/analyzeyou" rel="noopener">Source on GitHub</a> <button type="button" class="link-btn" id="clearCache">Clear saved games</button></p>
 </footer>
 

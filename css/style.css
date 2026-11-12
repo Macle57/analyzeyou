@@ -357,6 +357,26 @@ svg:focus:not(:focus-visible) { outline: none; }
 /* too few games to read much into: greyed like the win-rate heatmap's thin slots */
 .row.few .wdl i { background: var(--line); }
 .row.few .rl, .row.few .rv { color: var(--muted); }
+/* the same in the openings and opponents tables */
+tr.few .wdl i { background: var(--line); }
+tr.few td { color: var(--muted); }
+tr.few td a { color: inherit; }
+.few-cue { font-size: inherit; }
+
+/* Days of a month that failed to load. One hatch says "not loaded" wherever a day is drawn: the day
+   chart's band, the calendar's squares and its legend key, and the ledger's row. Same angle, same
+   weight, same ink in all three, and never the plain blank of a day without games. */
+:root { --hatch-ink: color-mix(in oklab, var(--muted) 46%, var(--surface)); }
+.cal button.missing { background-color: var(--surface); background-image: repeating-linear-gradient(135deg, var(--hatch-ink) 0 1.5px, transparent 1.5px 6px); }
+.scale i.missing-key { background: var(--surface) repeating-linear-gradient(135deg, var(--hatch-ink) 0 1.5px, transparent 1.5px 6px); }
+.hatch-line { fill: var(--hatch-ink); }
+.missing-pill { fill: var(--surface); }
+.missing-lab { fill: var(--ink-2); }
+.ledger tr.missing td { color: var(--ink-2); }
+.ledger td.missing-cell { background-image: repeating-linear-gradient(135deg, var(--hatch-ink) 0 1.5px, transparent 1.5px 6px); }
+.missing-tag { display: inline-block; background: var(--surface); border-radius: 99px; padding: 1px 9px; font-size: 12.5px; font-weight: 600; }
+/* a day at the edge of a failed month, with games from the month that did load: its colour, hatched over */
+.cal button.missing.partial { background-image: repeating-linear-gradient(135deg, var(--surface) 0 1.5px, transparent 1.5px 6px); }
 
 /* comparisons (after win / after loss, clock) */
 .pairs { display: grid; gap: 0; }
@@ -391,6 +411,8 @@ tr:last-child td { border-bottom: 0; }
 .table-wrap.tall { max-height: 540px; overflow: auto; }
 .ledger thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; box-shadow: 0 1px 0 var(--line); }
 .ledger th button { background: none; border: 0; padding: 0; font-weight: 600; color: inherit; }
+/* the whole header cell sorts: the button's hit area stretches over the (sticky, so positioned) cell */
+.ledger th > button::before { content: ""; position: absolute; inset: 0; }
 .ledger th button:hover { color: var(--ink); }
 .ledger th[aria-sort] button { color: var(--ink); }
 .ledger th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 9px; }
@@ -715,3 +737,61 @@ td .wdl { display: inline-flex; vertical-align: middle; }
   .cmp-more summary { float: right; padding: 6px 0 8px; }
   .cmp-more .table-wrap { clear: both; padding-top: 4px; }
 }
+
+
+/* ---------- review round 3 ---------- */
+
+/* One quiet word, "partial", wherever a figure is built from a range with a month missing: the first
+   tile, the verdict, the stickers, the busiest days and the ledger's totals. Same tag everywhere. */
+:root { --warn-line: #a87200; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --warn-line: #d79a1e; } }
+:root[data-theme="dark"] { --warn-line: #d79a1e; }
+#results[data-partial] #tiles .tile:first-child dt::after,
+#results[data-partial] .verdict-label::after,
+#results[data-partial] #topDaysTitle::after,
+#results[data-partial] #ledger tfoot td:first-child::after,
+.clock[data-partial] .stickers::after {
+  content: "partial"; display: inline-block; vertical-align: 0.12em; margin-left: 8px; padding: 2px 7px 2px 16px;
+  font: 700 11px/1.2 var(--font); font-variation-settings: "wdth" 100; letter-spacing: 0.03em; white-space: nowrap;
+  color: var(--ink-2); border: 1px solid var(--warn-line); border-radius: 99px;
+  background: radial-gradient(circle at 9px 50%, #fab219 0 3px, transparent 3.5px);
+}
+.clock[data-partial] .stickers::after { margin-left: 2px; color: var(--case-muted); border-color: rgba(250, 178, 25, 0.6); }
+#results[data-partial] .verdict-label::after { vertical-align: 0.3em; }
+
+/* why the two faces do not add up to the total time */
+.clock-gap { margin-top: 10px; font-size: 13px; line-height: 1.4; color: var(--case-muted); text-wrap: pretty; }
+
+/* compare: a filled dot marks the player the page is showing, an empty one the others */
+.row.cmp .rl::before {
+  content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 0.02em;
+  box-shadow: inset 0 0 0 1.5px var(--axis);
+}
+.row.cmp.on .rl::before { background: var(--ink); box-shadow: none; }
+.row.cmp.cmp-axis .rl::before { content: none; }
+#compare tr[aria-current="true"] td:first-child .link-btn { font-weight: 750; text-decoration-thickness: 2px; }
+
+/* heatmap: the weekday column is a solid strip, so squares scrolling under it never show through */
+.heat .dd { align-self: stretch; display: flex; align-items: center; margin: -2px -3px -2px 0; padding: 2px 3px 2px 0; }
+.heat > span:first-child { margin-right: -3px; padding-right: 3px; }
+
+/* the ledger's repeated column names (phones only; see renderLedger) */
+.ledger tr.rehead { display: none; }
+@media (max-width: 600px) {
+  .ledger tr.rehead { display: table-row; }
+  .ledger tr.rehead td { background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 650; padding-top: 6px; padding-bottom: 6px; }
+  .ledger tr.rehead td:first-child { background: var(--surface-2); }
+}
+
+/* touch: opponent names and compare names get a 40px-tall, cell-wide target */
+@media (max-width: 600px), (pointer: coarse) {
+  .mini tbody td { padding-top: 10px; padding-bottom: 10px; }
+  #opponents td:first-child a { display: block; padding: 11px 0; margin: -11px 0; overflow: hidden; text-overflow: ellipsis; }
+  #compare tbody td { padding-top: 11px; padding-bottom: 11px; }
+  #compare td:first-child .link-btn { display: block; width: 100%; min-width: 44px; padding: 12px 8px 12px 0; margin: -12px 0; text-align: left; }
+  .row.cmp .rl .link-btn { min-width: 44px; text-align: left; }
+}
+/* phones: in the compare rows the game count drops under the time, so a long name, its dot and the bars all fit */
+@media (max-width: 600px) { .row.cmp .rv small { display: block; margin-left: 0; } }
+/* the calendar's scale wraps as whole items on a narrow panel, never mid-phrase */
+.scale { flex-wrap: wrap; row-gap: 4px; }
