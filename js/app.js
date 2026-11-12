@@ -1,6 +1,6 @@
-import { fetchPlayerGames, clearCache } from './data.js';
+import { fetchPlayerGames, clearCache, isChessComUrl } from './data.js';
 import { analyze } from './analyze.js';
-import { dayChart, lineChart, colChart, showTip, hideTip, tipBox, setTip, timeTick } from './charts.js';
+import { dayChart, lineChart, colChart, showTip, hideTip, tipBox, setTip, timeTick, maxOf } from './charts.js';
 import { verdict, dayQuip, stickers, equivalents, pawnMark, parseMood } from './fun.js';
 
 // ---------- tiny helpers ----------
@@ -189,18 +189,26 @@ function compute(e) {
   e.stats = analyze(games, { from, to });
 }
 
-// The last state that loaded completely. A failed lookup goes back to it instead of leaving the page half-switched.
+// The last state that loaded completely: the settings and the store entries that belong to them.
+// A run may render the focus player early, so the store changes before the run commits; a failed or
+// stopped run puts both the settings and the entries back, never one without the other.
 let lastGood = null;
-const snapshot = () => ({ users: S.users.slice(), focus: S.focus, preset: S.preset, from: S.from, to: S.to });
-function settle() {
-  for (const [k, e] of store) if (e.state !== 'ok') { if (e.stats) store.set(k, { ...e, state: 'ok', error: null }); else store.delete(k); }
+const snapshot = () => ({ users: S.users.slice(), focus: S.focus, preset: S.preset, from: S.from, to: S.to, entries: new Map(store) });
+// Keeps lastGood's focus on the same player when the focus changes while it is current.
+function rememberFocus() {
+  if (!lastGood) return;
+  const j = lastGood.users.findIndex((x) => key(x) === key(S.users[S.focus] || ''));
+  if (j >= 0) lastGood.focus = j;
 }
 function restore() {
-  settle();
-  if (lastGood) Object.assign(S, { ...lastGood, users: lastGood.users.slice() });
-  else S.users = [];
+  store.clear();
+  if (lastGood) {
+    for (const [k, e] of lastGood.entries) store.set(k, e);
+    Object.assign(S, { users: lastGood.users.slice(), focus: lastGood.focus, preset: lastGood.preset, from: lastGood.from, to: lastGood.to });
+  } else S.users = [];
+  const focusName = S.users[S.focus];
   S.users = S.users.filter((u) => store.get(key(u))?.state === 'ok');
-  if (S.focus >= S.users.length) S.focus = 0;
+  S.focus = Math.max(0, S.users.indexOf(focusName));
   for (const e of store.values()) if (e.state === 'ok') compute(e);
   setStatus(null);
   document.querySelectorAll('.is-stale').forEach((n) => n.classList.remove('is-stale'));
@@ -243,7 +251,8 @@ async function run() {
       if (!err?.code) console.error(err);
       const message = err?.code && err.message ? err.message : 'Something went wrong while loading the games. Try again.';
       problem ||= message;
-      if (isFocus) { restore(); showMsg(message); return; }
+      // Fatal: end this run before restoring, so nothing still in flight can report progress afterwards.
+      if (isFocus) { ctrl?.abort(); runId++; restore(); showMsg(message); return; }
       // A compare player that fails is dropped; the rest of the page stays.
       store.delete(key(u));
       S.users = S.users.filter((x) => x !== u);
@@ -281,6 +290,10 @@ function render() {
   showMsg('');
   $('intro').hidden = true;
   $('results').hidden = false;
+  // Data-quality warnings (months that failed, daily games beyond the range) stay up while this player is shown.
+  const notes = e.warnings || [];
+  $('notice').textContent = notes.join(' ');
+  $('notice').hidden = !notes.length;
   document.querySelectorAll('#results .summary, #results .block').forEach((n) => n.classList.remove('is-stale'));
   const st = e.stats, who = e.player?.username || S.users[S.focus];
   const has = st.totals.games > 0;
@@ -308,18 +321,25 @@ function renderPlayers() {
   $('players').replaceChildren(...S.users.map((u, i) => {
     const e = store.get(key(u));
     return el('span', { class: 'chip', 'data-on': String(i === S.focus), 'data-state': e?.state || '' , title: e?.state === 'error' ? e.error : null },
-      el('button', { type: 'button', text: u, 'aria-pressed': String(i === S.focus), onclick: () => { S.focus = i; S.sel = null; S.pool = null; if (lastGood) lastGood.focus = i; writeUrl(); render(); } }),
+      el('button', { type: 'button', text: u, 'aria-pressed': String(i === S.focus), onclick: () => { S.focus = i; S.sel = null; S.pool = null; rememberFocus(); writeUrl(); render(); } }),
       S.users.length > 1 && el('button', { type: 'button', class: 'x', text: '×', 'aria-label': `Remove ${u}`, onclick: () => removeUser(i) }),
     );
   }));
   $('addForm').hidden = S.users.length >= 4;
 }
 function removeUser(i) {
-  S.users.splice(i, 1);
+  const [gone] = S.users.splice(i, 1);
   if (S.focus >= S.users.length) S.focus = S.users.length - 1; else if (i < S.focus) S.focus--; else if (i === S.focus) S.focus = 0;
   S.sel = null; S.pool = null;
   $('user').value = S.users[0] || '';
-  if (lastGood) lastGood = snapshot();
+  // Drop the player from the last good state too, but keep its dates and entries: during a run, S holds
+  // the new run's dates, which the old entries do not match.
+  if (lastGood) {
+    const focusName = lastGood.users[lastGood.focus];
+    lastGood.users = lastGood.users.filter((x) => key(x) !== key(gone));
+    lastGood.focus = Math.max(0, lastGood.users.indexOf(focusName));
+    rememberFocus();
+  }
   writeUrl(); render();
 }
 
@@ -610,7 +630,7 @@ function renderDetail(e) {
   const rows = shown.map((g) => el('tr', null,
     el('td', { text: multi ? `${dfShort.format(new Date(g.start))}, ${dfTime.format(new Date(g.start))}` : dfTime.format(new Date(g.start)) }),
     el('td', null, resultPill(g)),
-    el('td', null, el('a', { href: g.url, target: '_blank', rel: 'noopener', text: g.opponent }), g.oppRating ? ` (${g.oppRating})` : ''),
+    el('td', null, isChessComUrl(g.url) ? el('a', { href: g.url, target: '_blank', rel: 'noopener', text: g.opponent }) : g.opponent, g.oppRating ? ` (${g.oppRating})` : ''),
     el('td', { text: `${CLASS_LABEL[g.timeClass] || g.timeClass}, ${controlLabel(g)}${g.rated ? '' : ', unrated'}` }),
     el('td', { class: 'num', text: g.live === false ? '–' : dur(g.duration) }),
     el('td', { class: 'num', text: g.myThink != null ? `${dur(g.myThink)} / ${dur(g.oppThink)}` : '–' }),
@@ -632,7 +652,7 @@ function renderCalendar(e) {
   const show = n >= 28 && n <= 1100;
   $('calPanel').hidden = !show;
   if (!show) return;
-  const max = Math.max(...days.map((d) => d.time));
+  const max = maxOf(days, (d) => d.time);
   const cal = $('cal'), nodes = [];
   let col = [];
   let lastMonth = '';
@@ -730,7 +750,7 @@ function renderWhen(e) {
   const st = e.stats;
   seg($('heatSeg'), [{ value: 'time', label: 'Time' }, { value: 'games', label: 'Games' }, { value: 'win', label: 'Win rate' }, { value: 'elo', label: 'Rating' }], S.heat, (v) => { S.heat = v; renderWhen(e); });
   const cells = st.heatmap.flat();
-  const max = S.heat === 'time' ? Math.max(...cells.map((c) => c.time)) : S.heat === 'games' ? Math.max(...cells.map((c) => c.games)) : S.heat === 'elo' ? Math.max(1, ...cells.map((c) => Math.abs(c.eloNet))) : 0;
+  const max = S.heat === 'time' ? maxOf(cells, (c) => c.time) : S.heat === 'games' ? maxOf(cells, (c) => c.games) : S.heat === 'elo' ? maxOf(cells, (c) => Math.abs(c.eloNet), 1) : 0;
   const minGames = 4;
   const div = (good, mag) => `color-mix(in oklab, var(--${good ? 'win' : 'loss'}) ${Math.round(Math.min(1, Math.max(0.12, mag)) * 100)}%, var(--surface-2))`;
   const colour = (c) => {
@@ -870,7 +890,7 @@ function renderCompare() {
   const head = ['Player', 'Time', 'Games', 'Days played', 'On a day played', 'Average game', 'Won', 'Rating', 'Longest session', 'Own share of clock time'];
   const rows = S.users.map((u, i) => {
     const e = store.get(key(u));
-    const pick = () => { S.focus = i; S.sel = null; S.pool = null; if (lastGood) lastGood.focus = i; writeUrl(); render(); scrollTo({ top: 0, behavior: 'auto' }); };
+    const pick = () => { S.focus = i; S.sel = null; S.pool = null; rememberFocus(); writeUrl(); render(); scrollTo({ top: 0, behavior: 'auto' }); };
     const first = el('td', null, el('button', { type: 'button', class: 'link-btn', text: u, onclick: (ev) => { ev.stopPropagation(); pick(); } }));
     if (!e || e.state === 'loading') return el('tr', null, first, el('td', { colspan: head.length - 1, class: 'empty', text: 'Loading…' }));
     if (e.state === 'error') return el('tr', null, first, el('td', { colspan: head.length - 1, class: 'down', text: e.error }));
@@ -916,7 +936,7 @@ function renderLedger(e) {
     el('td', { class: `num ${st.elo.net > 0 ? 'up' : st.elo.net < 0 ? 'down' : ''}`, text: signed(st.elo.net) }),
     el('td', { class: 'num', text: String(st.streaks.longestWin?.length || 0) }), el('td', { class: 'num', text: String(st.streaks.longestLoss?.length || 0) }),
     el('td', { class: 'num', text: dur(t.avgGame) }));
-  $('ledger').replaceChildren(el('thead', null, head), el('tbody', null, ...(body.length ? body : [el('tr', null, el('td', { colspan: COLS.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
+  $('ledger').replaceChildren(el('thead', null, head), el('tbody', null, (body.length ? body : [el('tr', null, el('td', { colspan: COLS.length, class: 'empty', text: 'No days to show.' }))])), el('tfoot', null, foot));
 }
 function downloadCsv() {
   const e = focusEntry();

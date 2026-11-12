@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validateUsername, parseClocks, parseTimeControl, countPlies, openingName, openingFamily,
-  normalizeGame, computeRatingDeltas, fetchPlayerGames, clearCache, LAG_PER_PLY,
+  normalizeGame, computeRatingDeltas, fetchPlayerGames, clearCache, LAG_PER_PLY, isChessComUrl,
 } from '../js/data.js';
 import * as raw from './fixtures/raw-games.mjs';
 
@@ -216,7 +216,10 @@ test('fetches only overlapping months plus a seed month, seeds rating deltas, fi
   const months = log.filter((u) => /\/games\/\d{4}\/\d{2}$/.test(u)).map((u) => u.slice(-7)).sort();
   assert.ok(months.includes('2026/08'), 'seed month fetched');
   assert.ok(months.includes('2026/10'));
-  assert.ok(!months.includes('2026/06'));
+  // June is outside the range; it is read only afterwards, as a baseline walk-back for the pools
+  // (bullet, rapid, chess960) that the seed month did not have.
+  const monthLog = log.filter((u) => /\/games\/\d{4}\/\d{2}$/.test(u));
+  assert.equal(monthLog.at(-1), `${API}/games/2026/06`, 'June only as the last, walk-back request');
   assert.equal(progress.at(-1).done, progress.at(-1).total);
   // Range filter is by local start; all October games start inside [from, to] in any timezone except the daily one.
   for (const g of res.games) assert.ok(g.start >= from.getTime() && g.start <= to.getTime());
@@ -225,7 +228,8 @@ test('fetches only overlapping months plus a seed month, seeds rating deltas, fi
   for (let i = 1; i < res.games.length; i++) assert.ok(res.games[i - 1].start <= res.games[i].start);
   const incr = res.games.find((g) => g.id === 'g-incr');
   assert.equal(incr?.ratingDelta, 30, 'delta against the seed-month game');
-  assert.deepEqual(res.warnings, []);
+  // October holds a daily game and the range ends before November, so later-ending daily games could be missing.
+  assert.deepEqual(res.warnings, ['Daily games that started in this range but ended after Oct 2026 are not counted.']);
 });
 
 test('a stale 404 on the archive list is retried with a cache-busting query', async () => {
@@ -286,4 +290,173 @@ test('clearCache and caching are harmless without IndexedDB (Node)', async () =>
   const routes = { [API]: PROFILE, [`${API}/games/archives`]: { archives: [`${API}/games/2026/10`] }, [`${API}/games/2026/10`]: { games: [raw.checkmateWin] } };
   const res = await fetchPlayerGames('testuser', { fetch: mockApi(routes), now: NOW });
   assert.equal(res.games.length, 1);
+});
+
+// ------------------------------------------------------------------ review round 1 regressions
+
+/** A minimal raw game for TestUser (no PGN, so start = end). */
+function rawGame(uuid, endIso, timeClass, rating, extra = {}) {
+  return {
+    url: `https://www.chess.com/game/live/${uuid}`, uuid, time_control: timeClass === 'daily' ? '1/86400' : '180',
+    end_time: Math.floor(Date.parse(endIso) / 1000), rated: true, time_class: timeClass, rules: 'chess',
+    white: { username: 'TestUser', rating, result: 'win' }, black: { username: 'Opp', rating: 1400, result: 'resigned' },
+    ...extra,
+  };
+}
+const archives = (...months) => ({ archives: months.map((m) => `${API}/games/${m}`) });
+const utc = (iso) => new Date(Date.parse(iso));
+const monthsIn = (log) => log.filter((u) => /\/games\/\d{4}\/\d{2}$/.test(u)).map((u) => u.slice(-7));
+
+test('timeout without start headers: start is backed off by the flagged clock too, think <= duration', () => {
+  const pgn = raw.timeoutLoss.pgn.replace(/^\[(UTCDate|UTCTime|StartTime) "[^"]*"\]\n/gm, '');
+  assert.ok(!/UTCTime|StartTime/.test(pgn));
+  const g = normalizeGame({ ...raw.timeoutLoss, pgn }, 'testuser');
+  // White used 8 s, black used 55 s and flagged with 5 s left: 68 s on the clocks in total.
+  assert.equal(g.myThink, 60);
+  assert.equal(g.oppThink, 8);
+  assert.equal(g.duration, 68);
+  assert.ok(g.myThink + g.oppThink <= g.duration);
+});
+
+test('rating deltas never bridge a month that failed to load', () => {
+  const mk = (id, end, myRating) => ({ id, start: end - 100, end, pool: 'chess:blitz', rated: true, myRating, ratingDelta: 0 });
+  const aug = mk('aug', Date.parse('2026-08-20T10:00:00Z'), 1400);
+  const oct1 = mk('oct1', Date.parse('2026-10-02T10:00:00Z'), 1430);
+  const oct2 = mk('oct2', Date.parse('2026-10-02T11:00:00Z'), 1435);
+  const sep = [Date.parse('2026-09-01T00:00:00Z'), Date.parse('2026-10-01T00:00:00Z')];
+  computeRatingDeltas([aug, oct1, oct2], [sep]);
+  assert.equal(oct1.ratingDelta, null, 'September is unknown, so the October jump is unknown');
+  assert.equal(oct2.ratingDelta, 5, 'continuity resumes after the gap');
+  computeRatingDeltas([aug, oct1, oct2]);
+  assert.equal(oct1.ratingDelta, 30, 'without a gap the delta spans the months');
+});
+
+test('a failed month in the range breaks the rating baseline through fetchPlayerGames', async () => {
+  const routes = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/08', '2026/09', '2026/10');
+    if (url === `${API}/games/2026/08`) return { games: [rawGame('aug', '2026-08-20T10:00:00Z', 'blitz', 1400)] };
+    if (url === `${API}/games/2026/09`) return 503;
+    if (url === `${API}/games/2026/10`) return { games: [rawGame('oct1', '2026-10-02T10:00:00Z', 'blitz', 1430), rawGame('oct2', '2026-10-02T11:00:00Z', 'blitz', 1435)] };
+    return null;
+  };
+  const res = await fetchPlayerGames('testuser', { from: utc('2026-08-15T12:00:00Z'), to: utc('2026-10-05T12:00:00Z'), fetch: mockApi(routes), now: NOW, cache: false, retryBaseMs: 1 });
+  const d = Object.fromEntries(res.games.map((g) => [g.id, g.ratingDelta]));
+  assert.deepEqual(d, { aug: null, oct1: null, oct2: 5 });
+  assert.deepEqual(res.warnings, ["Couldn't load Sep 2026; numbers for that month are missing."]);
+});
+
+test('every month overlapping the range failed -> error, even when the seed month loaded', async () => {
+  const routes = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/09', '2026/10');
+    if (url === `${API}/games/2026/09`) return { games: [rawGame('sep', '2026-09-20T10:00:00Z', 'blitz', 1400)] };
+    if (url === `${API}/games/2026/10`) return 503;
+    return null;
+  };
+  await assert.rejects(
+    fetchPlayerGames('testuser', { from: utc('2026-10-02T12:00:00Z'), to: utc('2026-10-03T12:00:00Z'), fetch: mockApi(routes), now: NOW, cache: false, retryBaseMs: 1 }),
+    (e) => e.code === 'network',
+  );
+});
+
+test('after a fatal month error no queued month starts and onProgress stops', async () => {
+  const log = [];
+  const slow = (body, signal) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(new Response(JSON.stringify(body), { status: 200 })), 80);
+    signal?.addEventListener('abort', () => { clearTimeout(t); const e = new Error('aborted'); e.name = 'AbortError'; reject(e); }, { once: true });
+  });
+  const f = async (url, init) => {
+    log.push(url);
+    if (url === API) return new Response(JSON.stringify(PROFILE), { status: 200 });
+    if (url === `${API}/games/archives`) return new Response(JSON.stringify(archives('2026/06', '2026/07', '2026/08', '2026/09', '2026/10')), { status: 200 });
+    if (url === `${API}/games/2026/06`) return new Response('{}', { status: 429 });
+    return slow({ games: [] }, init?.signal);
+  };
+  const progress = [];
+  let rejectedAt = null;
+  await assert.rejects(
+    fetchPlayerGames('testuser', { from: utc('2026-06-10T12:00:00Z'), to: utc('2026-10-30T12:00:00Z'), fetch: f, now: NOW, cache: false, retryBaseMs: 1, onProgress: (p) => progress.push({ ...p, late: rejectedAt != null }) })
+      .finally(() => { rejectedAt = log.length; }),
+    (e) => e.code === 'rate_limited',
+  );
+  await new Promise((r) => setTimeout(r, 200)); // give stragglers time to (wrongly) report or start
+  assert.equal(log.length, rejectedAt, 'no request after the rejection');
+  assert.deepEqual(monthsIn(log).sort(), ['2026/06', '2026/06', '2026/06', '2026/07'], 'August to October never started');
+  assert.ok(!progress.some((p) => p.late), 'no progress after the rejection');
+});
+
+test('pools missing from the seed month walk back for a baseline (bounded, serial)', async () => {
+  const log = [];
+  const routes = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/07', '2026/08', '2026/09', '2026/10');
+    if (url === `${API}/games/2026/07`) return { games: [rawGame('jul', '2026-07-20T10:00:00Z', 'blitz', 1390)] };
+    if (url === `${API}/games/2026/08`) return { games: [rawGame('aug', '2026-08-20T10:00:00Z', 'blitz', 1400)] };
+    if (url === `${API}/games/2026/09`) return { games: [rawGame('sep', '2026-09-20T10:00:00Z', 'bullet', 1200)] };
+    if (url === `${API}/games/2026/10`) return { games: [rawGame('oct', '2026-10-02T12:00:00Z', 'blitz', 1410)] };
+    return null;
+  };
+  const res = await fetchPlayerGames('testuser', { from: utc('2026-10-02T00:00:00Z'), to: utc('2026-10-03T23:00:00Z'), fetch: mockApi(routes, log), now: NOW, cache: false });
+  assert.equal(res.games.length, 1);
+  assert.equal(res.games[0].ratingDelta, 10, 'baseline found in August');
+  assert.deepEqual(monthsIn(log).slice(-1), ['2026/08']);
+  assert.ok(!monthsIn(log).includes('2026/07'), 'stops as soon as every pool has a baseline');
+
+  // A pool never played before: the walk stops after 6 earlier months and the delta stays null.
+  const many = ['2025/12', '2026/01', '2026/02', '2026/03', '2026/04', '2026/05', '2026/06', '2026/07', '2026/08', '2026/09', '2026/10'];
+  const log2 = [];
+  const routes2 = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives(...many);
+    if (url === `${API}/games/2026/10`) return { games: [rawGame('oct', '2026-10-02T12:00:00Z', 'rapid', 1500)] };
+    if (/\/games\/\d{4}\/\d{2}$/.test(url)) return { games: [rawGame(url.slice(-7), `${url.slice(-7).replace('/', '-')}-10T10:00:00Z`, 'blitz', 1400)] };
+    return null;
+  };
+  const res2 = await fetchPlayerGames('testuser', { from: utc('2026-10-02T00:00:00Z'), to: utc('2026-10-03T23:00:00Z'), fetch: mockApi(routes2, log2), now: NOW, cache: false });
+  assert.equal(res2.games[0].ratingDelta, null);
+  assert.deepEqual(monthsIn(log2).sort(), ['2026/03', '2026/04', '2026/05', '2026/06', '2026/07', '2026/08', '2026/09', '2026/10']);
+});
+
+test('a 404 month is cached for an hour only, never as a closed month', async () => {
+  const mem = new Map();
+  const cacheStore = { get: async (k) => mem.get(k) ?? null, put: async (k, v) => { mem.set(k, v); } };
+  const routes = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/09', '2026/10');
+    if (url === `${API}/games/2026/10`) return { games: [rawGame('oct', '2026-10-02T12:00:00Z', 'blitz', 1410)] };
+    return null; // September: stale 404
+  };
+  const opts = (now, log) => ({ from: utc('2026-09-10T00:00:00Z'), to: utc('2026-10-05T00:00:00Z'), fetch: mockApi(routes, log), now, cacheStore });
+  const l1 = [], l2 = [], l3 = [];
+  await fetchPlayerGames('testuser', opts(NOW, l1));
+  assert.deepEqual(monthsIn(l1).sort(), ['2026/09', '2026/10']);
+  assert.equal(mem.get('testuser|2026/09').missing, true);
+  await fetchPlayerGames('testuser', opts(NOW + 10 * 60e3, l2));
+  assert.deepEqual(monthsIn(l2), [], 'both months reused within the hour');
+  await fetchPlayerGames('testuser', opts(NOW + 2 * 3600e3, l3));
+  assert.deepEqual(monthsIn(l3), ['2026/09'], 'the 404 month is asked for again; October stays cached');
+});
+
+test('daily games in a past range add a warning; a range reaching the current month does not', async () => {
+  const routes = (url) => {
+    if (url === API) return PROFILE;
+    if (url === `${API}/games/archives`) return archives('2026/10', '2026/11');
+    if (url === `${API}/games/2026/10`) return { games: [rawGame('d1', '2026-10-04T12:00:00Z', 'daily', 1500)] };
+    if (url === `${API}/games/2026/11`) return { games: [rawGame('d2', '2026-11-04T12:00:00Z', 'daily', 1505)] };
+    return null;
+  };
+  const past = await fetchPlayerGames('testuser', { from: utc('2026-10-01T12:00:00Z'), to: utc('2026-10-10T12:00:00Z'), fetch: mockApi(routes), now: NOW, cache: false });
+  assert.deepEqual(past.warnings, ['Daily games that started in this range but ended after Oct 2026 are not counted.']);
+  const current = await fetchPlayerGames('testuser', { from: utc('2026-11-01T12:00:00Z'), to: utc('2026-11-10T12:00:00Z'), fetch: mockApi(routes), now: NOW, cache: false });
+  assert.deepEqual(current.warnings, []);
+  const noDaily = await fetchPlayerGames('testuser', { from: utc('2026-10-01T12:00:00Z'), to: utc('2026-10-10T12:00:00Z'), fetch: mockApi((u) => (u === `${API}/games/2026/10` ? { games: [rawGame('b', '2026-10-04T12:00:00Z', 'blitz', 1500)] } : routes(u))), now: NOW, cache: false });
+  assert.deepEqual(noDaily.warnings, []);
+});
+
+test('isChessComUrl accepts only https links on chess.com', () => {
+  for (const ok of ['https://www.chess.com/game/live/1', 'https://chess.com/member/x', 'https://images.chess.com/a.png']) assert.ok(isChessComUrl(ok), ok);
+  for (const bad of ['javascript:alert(1)', 'http://www.chess.com/game/live/1', 'https://evilchess.com/x', 'https://chess.com.evil.io/x', 'data:text/html,x', '', null, undefined, 42, '/game/live/1']) {
+    assert.ok(!isChessComUrl(bad), String(bad));
+  }
 });

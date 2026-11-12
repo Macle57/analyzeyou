@@ -43,13 +43,50 @@ export function hideTip() { tipEl().hidden = true; }
 // Hover tooltips for plain HTML marks: put data on the node with setTip(node, fn).
 const tipFns = new WeakMap();
 export function setTip(node, fn) { tipFns.set(node, fn); node.dataset.tip = '1'; }
-document.addEventListener('pointermove', (e) => {
-  const n = e.target.closest?.('[data-tip]');
-  if (n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
-  else if (!e.target.closest?.('svg[data-chart]')) hideTip();
-});
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('[data-tip], svg[data-chart]')) hideTip(); });
-addEventListener('scroll', hideTip, { passive: true });
+if (typeof document !== 'undefined' && typeof addEventListener === 'function') { // absent when tests import this in Node
+  document.addEventListener('pointermove', (e) => {
+    const n = e.target.closest?.('[data-tip]');
+    if (n && tipFns.has(n)) showTip(e.clientX, e.clientY, tipFns.get(n)());
+    else if (!e.target.closest?.('svg[data-chart]')) hideTip();
+  });
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('[data-tip], svg[data-chart]')) hideTip(); });
+  addEventListener('scroll', hideTip, { passive: true });
+}
+
+// ---------- array helpers (loops: spreading 100k+ values into Math.min/max throws RangeError) ----------
+/** Largest `f(x)` over `arr`, at least `floor`. */
+export function maxOf(arr, f = (x) => x, floor = -Infinity) {
+  let m = floor;
+  for (let i = 0; i < arr.length; i++) { const v = f(arr[i]); if (v > m) m = v; }
+  return m;
+}
+/** Smallest `f(x)` over `arr`, at most `ceil`. */
+export function minOf(arr, f = (x) => x, ceil = Infinity) {
+  let m = ceil;
+  for (let i = 0; i < arr.length; i++) { const v = f(arr[i]); if (v < m) m = v; }
+  return m;
+}
+/**
+ * Thins a line for drawing: above `limit` points, splits them into buckets and keeps each bucket's
+ * lowest and highest point (in their original order), so peaks and dips survive. Always keeps the
+ * first and last point. Returns the input unchanged when it is short enough.
+ */
+export function thinLine(pts, limit = 2400) {
+  const n = pts.length;
+  if (n <= limit) return pts;
+  const size = Math.ceil(n / Math.floor(limit / 2));
+  const out = [pts[0]];
+  for (let s = 1; s < n - 1; s += size) {
+    const e = Math.min(n - 1, s + size);
+    let lo = s, hi = s;
+    for (let i = s + 1; i < e; i++) { if (pts[i].v < pts[lo].v) lo = i; if (pts[i].v > pts[hi].v) hi = i; }
+    if (lo === hi) out.push(pts[lo]);
+    else if (lo < hi) out.push(pts[lo], pts[hi]);
+    else out.push(pts[hi], pts[lo]);
+  }
+  out.push(pts[n - 1]);
+  return out;
+}
 
 // ---------- scales ----------
 export function niceMax(max, target = 4) {
@@ -109,7 +146,7 @@ export function dayChart(root, buckets, o) {
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'group', 'aria-label': o.label, 'data-chart': 'day' });
 
   // time panel
-  const ts = timeScale(Math.max(60, ...buckets.map((b) => b.time)));
+  const ts = timeScale(maxOf(buckets, (b) => b.time, 60));
   const y1 = (v) => m.t + h1 - (v / ts.max) * h1;
   svg.append(S('text', { x: 0, y: 12, class: 'cap' }, 'Time played'));
   for (const v of ts.ticks) {
@@ -144,8 +181,8 @@ export function dayChart(root, buckets, o) {
   // rating panel
   if (showElo) {
     const y0 = m.t + h1 + gap;
-    const up = niceMax(Math.max(1, ...buckets.map((b) => b.eloGained)), 2);
-    const dn = niceMax(Math.max(1, ...buckets.map((b) => b.eloLost)), 2);
+    const up = niceMax(maxOf(buckets, (b) => b.eloGained, 1), 2);
+    const dn = niceMax(maxOf(buckets, (b) => b.eloLost, 1), 2);
     const step = Math.max(up.step, dn.step);
     const upMax = Math.ceil(up.max / step) * step, dnMax = Math.ceil(dn.max / step) * step;
     const y2 = (v) => y0 + ((upMax - v) / (upMax + dnMax)) * h2;
@@ -222,7 +259,7 @@ export function lineChart(root, pts, o) {
   const iw = W - m.l - m.r;
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'line' });
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-  let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  let lo = minOf(pts, (p) => p.v), hi = maxOf(pts, (p) => p.v);
   if (o.start != null) { lo = Math.min(lo, o.start); hi = Math.max(hi, o.start); }
   const span = Math.max(10, hi - lo);
   const step = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((s) => span / s <= 4.5) || 1000;
@@ -239,8 +276,10 @@ export function lineChart(root, pts, o) {
     svg.append(S('text', { x: x(t), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === nT - 1 ? 'end' : 'middle', class: 'tick' }, o.fmtX(t)));
   } else svg.append(S('text', { x: x(t0), y: H - 6, 'text-anchor': 'middle', class: 'tick' }, o.fmtX(t0)));
 
-  let d = '';
-  pts.forEach((p, i) => { d += (i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1); });
+  // The path is drawn from a thinned copy; the peak, last point and tooltips use every real point.
+  const parts = [];
+  thinLine(pts).forEach((p, i) => { parts.push((i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1)); });
+  const d = parts.join('');
   svg.append(S('path', { d, class: 's-time', fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
   const last = pts[pts.length - 1];
   let peak = pts[0];
@@ -280,7 +319,7 @@ export function colChart(root, items, o) {
   const m = { l: 40, r: 6, t: 14, b: 24 }, h = 170, H = m.t + h + m.b;
   const iw = W - m.l - m.r, n = items.length, band = iw / n, bw = Math.max(2, Math.min(24, band - 2));
   const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'col' });
-  const sc = o.max ? { max: o.max, step: o.step } : niceMax(Math.max(...items.map((d) => d.value || 0)), 4);
+  const sc = o.max ? { max: o.max, step: o.step } : niceMax(maxOf(items, (d) => d.value || 0, 0), 4);
   const y = (v) => m.t + h - (v / sc.max) * h;
   for (let v = 0; v <= sc.max + 1e-9; v += sc.step) {
     svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v ? 'grid' : 'base' }));
