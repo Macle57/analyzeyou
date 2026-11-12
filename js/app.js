@@ -1,6 +1,7 @@
 import { fetchPlayerGames, clearCache } from './data.js';
 import { analyze } from './analyze.js';
 import { dayChart, lineChart, colChart, showTip, hideTip, tipBox, setTip, timeTick } from './charts.js';
+import { verdict, dayQuip, stickers, equivalents, pawnMark, parseMood } from './fun.js';
 
 // ---------- tiny helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -67,7 +68,8 @@ function durNode(s) {
 }
 function durWords(s) {
   s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  // Minutes are cut the same way dur() cuts them, so the headline and the tiles never disagree by a minute.
+  const h = Math.floor(s / 3600), m = h ? Math.floor((s % 3600) / 60) : Math.round(s / 60);
   const hp = h ? `${num(h)} hour${h === 1 ? '' : 's'}` : '', mp = m || !h ? `${m} minute${m === 1 ? '' : 's'}` : '';
   return [hp, mp].filter(Boolean).join(' ');
 }
@@ -116,6 +118,8 @@ const S = {
 const store = new Map(); // lowercased username -> { state, player, games, stats, error }
 let ctrl = null;
 let runId = 0;
+// ?mood=0..6 forces a verdict level, so each one can be seen without finding a player who fits.
+const MOOD = parseMood(new URLSearchParams(location.search).get('mood'));
 
 const key = (u) => u.toLowerCase();
 const focusEntry = () => store.get(key(S.users[S.focus] || ''));
@@ -148,6 +152,7 @@ function writeUrl() {
   if (S.tc !== 'all') q.set('tc', S.tc);
   if (S.rated) q.set('rated', '1');
   if (S.focus > 0 && S.users[S.focus]) q.set('focus', S.users[S.focus]);
+  if (MOOD != null) q.set('mood', String(MOOD));
   const s = q.toString();
   history.replaceState(null, '', s ? `?${s.replace(/%2C/g, ',')}` : location.pathname);
 }
@@ -324,10 +329,17 @@ function renderClock(e, who) {
   const t = e.stats.totals, me = t.myThink || 0, opp = t.oppThink || 0;
   $('faceMeName').textContent = who;
   const has = t.thinkGames > 0;
-  $('faceMeFoot').textContent = has ? `${dur(me / t.thinkGames)} a game on their own clock` : 'no clock data in this range';
-  $('faceOppFoot').textContent = has ? `${dur(opp / t.thinkGames)} a game on the other clock` : 'no clock data in this range';
-  $('flagMe').hidden = !(has && me > opp); $('flagOpp').hidden = !(has && opp > me);
-  document.querySelector('.clock').dataset.lean = !has || me === opp ? '' : me > opp ? 'me' : 'opp';
+  const even = has && Math.round(me) === Math.round(opp);
+  for (const [side, secs, base] of [['Me', me, `${dur(me / t.thinkGames)} a game on their own clock`], ['Opp', opp, `${dur(opp / t.thinkGames)} a game on the other clock`]]) {
+    const alt = (faceAlt[side] = { i: 0, list: has ? [base, ...equivalents(secs)] : ['no clock data in this range'] });
+    $(`face${side}Foot`).textContent = alt.list[0];
+    const box = $(`lcdBox${side}`), live = alt.list.length > 1;
+    for (const [k, v] of [['role', 'button'], ['tabindex', '0'], ['aria-label', 'Say this time another way']]) { if (live) box.setAttribute(k, v); else box.removeAttribute(k); }
+  }
+  $('flagMe').hidden = !(has && (me > opp || even)); $('flagOpp').hidden = !(has && (opp > me || even));
+  $('flagMe').textContent = $('flagOpp').textContent = even ? 'dead even' : 'thought longer';
+  document.querySelector('.clock').dataset.lean = !has || even ? '' : me > opp ? 'me' : 'opp';
+  renderStickers(e, who);
   const ghost = Math.max(me, opp) >= 3600000 ? '8888:88' : '888:88:88';
   document.querySelectorAll('.lcd-ghost').forEach((g) => { g.textContent = ghost; });
   $('clockSr').textContent = has ? `${who} thought for ${durWords(me)}; opponents for ${durWords(opp)}.` : '';
@@ -341,6 +353,46 @@ function renderClock(e, who) {
   requestAnimationFrame(frame);
 }
 
+// Pressing a clock face says the same time another way (films, nights of sleep).
+const faceAlt = { Me: { i: 0, list: [] }, Opp: { i: 0, list: [] } };
+function cycleFace(side) {
+  const alt = faceAlt[side];
+  if (alt.list.length < 2) return;
+  alt.i = (alt.i + 1) % alt.list.length;
+  $(`face${side}Foot`).textContent = alt.list[alt.i];
+}
+for (const side of ['Me', 'Opp']) {
+  const box = $(`lcdBox${side}`);
+  box.addEventListener('click', () => cycleFace(side));
+  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); cycleFace(side); } });
+}
+
+const FMT = { dur, pct, num, plural, date: (d) => dateStr(d, dfShort) };
+// Stickers on the clock casing: small true facts about this player, each revealed by pressing it.
+function renderStickers(e, who) {
+  const list = stickers(e.stats, e.view, who, FMT), row = $('stickers'), note = $('stickerNote');
+  row.hidden = !list.length; note.hidden = true; note.replaceChildren();
+  row.replaceChildren(...list.map((s) => {
+    const b = el('button', { type: 'button', class: 'sticker', text: s.label, title: s.note, 'aria-expanded': 'false' });
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') === 'true';
+      for (const x of row.children) x.setAttribute('aria-expanded', 'false');
+      note.hidden = open;
+      if (!open) { b.setAttribute('aria-expanded', 'true'); note.replaceChildren(pawnMark(), el('span', { text: s.note })); }
+    });
+    return b;
+  }));
+}
+function renderVerdict(e, who) {
+  const v = verdict(e.stats, who, FMT, MOOD), box = $('verdict');
+  box.hidden = false; box.dataset.tier = v.key;
+  box.replaceChildren(
+    el('div', { class: 'verdict-art' }, v.art),
+    el('div', { class: 'verdict-text' },
+      el('h2', { class: 'verdict-label', text: v.label }), el('p', { class: 'verdict-line', text: v.line }),
+      v.extra && el('p', { class: 'verdict-line', text: v.extra }), v.basis && el('p', { class: 'verdict-basis', text: v.basis })));
+}
+
 function tile(label, value, note) {
   return el('div', { class: 'tile' }, el('dt', { text: label }), el('dd', { class: 'v' }, value), el('dd', { class: 'n' }, note || ' '));
 }
@@ -351,9 +403,10 @@ function dayLink(date, f = dfMed) {
 function renderSummary(e, who) {
   const st = e.stats, t = st.totals, r = st.range;
   const rangeText = `${dateStr(r.from)} to ${dateStr(r.to)}`;
+  renderVerdict(e, who);
   if (!t.games) {
     $('headline').textContent = `No games for ${who} in this range`;
-    $('subline').textContent = `Nothing was played between ${rangeText}${S.tc !== 'all' || S.rated ? ' with these filters' : ''}. Try a longer range${S.tc !== 'all' || S.rated ? ' or clear the filters' : ''}.`;
+    $('subline').textContent = `Nothing was played between ${dateStr(r.from)} and ${dateStr(r.to)}${S.tc !== 'all' || S.rated ? ' with these filters' : ''}. Try a longer range${S.tc !== 'all' || S.rated ? ' or clear the filters' : ''}.`;
     $('tiles').replaceChildren();
     $('tiles').hidden = true;
     return;
@@ -363,7 +416,7 @@ function renderSummary(e, who) {
   const waking = t.time / (r.days * 16 * 3600);
   const dailyOnly = t.liveGames === 0;
   $('subline').textContent = dailyOnly
-    ? `${plural(t.games, 'daily game')} between ${rangeText}. Daily games run over days, so they have no time at the board to count.`
+    ? `${plural(t.games, 'daily game')} between ${dateStr(r.from)} and ${dateStr(r.to)}. Daily games run over days, so they have no time at the board to count.`
     : `${plural(t.games, 'game')} on ${t.activeDays} of ${plural(r.days, 'day')}, ${rangeText}. That is ${dur(t.avgPerDay)} for every day in the range, or ${pct(waking, waking < 0.1 ? 1 : 0)} of the waking hours.`;
   const rec = st.records, day = (d) => st.days.find((x) => x.date === d);
   const longest = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
@@ -542,6 +595,8 @@ function renderDetail(e) {
     el('button', { type: 'button', class: 'ghost-btn', text: 'Close', onclick: () => { S.sel = null; renderDays(e); renderLedger(e); } }));
   box.replaceChildren(head);
   if (!b.games) return;
+  const quip = multi ? null : dayQuip(b, games, FMT);
+  if (quip) box.append(el('p', { class: 'quip' }, pawnMark(), el('span', { text: quip })));
   const think = b.myThink + b.oppThink;
   box.append(el('dl', { class: 'tiles' },
     tile('Time', durNode(b.time), `${plural(b.sessions, 'session')}`),
@@ -942,6 +997,7 @@ addEventListener('resize', () => {
 });
 
 // ---------- start ----------
+console.info('%canalyzeyou', 'font-weight:800;font-size:16px', '\nReading the source instead of queueing another game. That is the healthiest thing on this page.');
 readUrl();
 syncTheme();
 syncControls();

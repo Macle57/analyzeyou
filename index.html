@@ -22,7 +22,7 @@
 
 <header class="top">
   <a class="wordmark" href="./" aria-label="analyzeyou, start over">analyzeyou</a>
-  <p class="top-note">Time spent on chess.com, counted.</p>
+  <p class="top-note">analyzing your chess addiction</p>
   <button class="ghost-btn" id="themeBtn" type="button" aria-label="Switch between light and dark theme">Dark</button>
 </header>
 
@@ -60,17 +60,19 @@
     <div class="faces">
       <div class="face" id="faceMe">
         <div class="face-head"><span class="face-name" id="faceMeName">You</span><span class="face-flag" id="flagMe" hidden>thought longer</span></div>
-        <div class="lcd" aria-hidden="true"><span class="lcd-ghost">888:88:88</span><span class="lcd-val" id="lcdMe">0:00:00</span></div>
-        <p class="face-foot" id="faceMeFoot">on your clock</p>
+        <div class="lcd" id="lcdBoxMe" data-side="Me"><span class="lcd-ghost" aria-hidden="true">888:88:88</span><span class="lcd-val" id="lcdMe" aria-hidden="true">0:00:00</span></div>
+        <p class="face-foot" id="faceMeFoot" aria-live="polite">on your clock</p>
       </div>
       <div class="lever" aria-hidden="true"><i></i></div>
       <div class="face" id="faceOpp">
         <div class="face-head"><span class="face-name">Opponents</span><span class="face-flag" id="flagOpp" hidden>thought longer</span></div>
-        <div class="lcd" aria-hidden="true"><span class="lcd-ghost">888:88:88</span><span class="lcd-val" id="lcdOpp">0:00:00</span></div>
-        <p class="face-foot" id="faceOppFoot">on their clocks</p>
+        <div class="lcd" id="lcdBoxOpp" data-side="Opp"><span class="lcd-ghost" aria-hidden="true">888:88:88</span><span class="lcd-val" id="lcdOpp" aria-hidden="true">0:00:00</span></div>
+        <p class="face-foot" id="faceOppFoot" aria-live="polite">on their clocks</p>
       </div>
     </div>
     <p class="sr-only" id="clockSr" aria-live="polite"></p>
+    <div class="stickers" id="stickers" hidden></div>
+    <p class="sticker-note" id="stickerNote" aria-live="polite" hidden></p>
 
     <div class="clock-status" id="status" hidden>
       <div class="bar"><i id="barFill"></i></div>
@@ -101,8 +103,13 @@
     </div>
 
     <section class="summary">
-      <h1 id="headline"></h1>
-      <p class="lede" id="subline"></p>
+      <div class="summary-top">
+        <div class="summary-text">
+          <h1 id="headline"></h1>
+          <p class="lede" id="subline"></p>
+        </div>
+        <aside class="verdict" id="verdict" aria-label="The verdict" hidden></aside>
+      </div>
       <dl class="tiles" id="tiles"></dl>
     </section>
 

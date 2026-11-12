@@ -398,8 +398,8 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 }
 @media (max-width: 600px) {
   .top, main, .foot { padding-left: 16px; padding-right: 16px; }
-  .top-note { display: none; }
-  .top { justify-content: space-between; }
+  .top { flex-wrap: wrap; justify-content: space-between; row-gap: 0; }
+  .top-note { order: 3; flex: 1 1 100%; margin-top: -2px; }
   .clock { padding: 14px; border-radius: 18px; }
   .field-range, .field-user { flex: 1 1 100%; }
   .dates { flex: 1 1 100%; }
@@ -427,6 +427,78 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- the verdict and its art ---------- */
+.summary-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 490px); gap: 20px 44px; align-items: end; }
+.verdict { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 4px 20px; align-items: end; padding-bottom: 4px; }
+.verdict-art { align-self: end; }
+.verdict-label { font-variation-settings: "wdth" 72; font-weight: 760; font-size: 25px; line-height: 1.08; letter-spacing: -0.006em; text-wrap: balance; }
+.verdict-line { font-size: 15.5px; line-height: 1.42; color: var(--ink-2); margin-top: 7px; text-wrap: pretty; }
+.verdict-basis { font-size: 13px; color: var(--muted); margin-top: 8px; }
+@media (max-width: 900px) {
+  .summary-top { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .verdict { grid-template-columns: 120px minmax(0, 1fr); align-items: center; max-width: 560px; }
+}
+@media (max-width: 600px) {
+  .verdict { grid-template-columns: 112px minmax(0, 1fr); gap: 4px 14px; align-items: start; }
+  .verdict-art { align-self: start; margin-top: 2px; }
+  .verdict-label { font-size: 22px; }
+  .verdict-line { font-size: 15px; }
+}
+
+.art { display: block; width: 100%; height: auto; overflow: visible; }
+.art .o { fill: var(--surface); stroke: var(--ink); stroke-width: 3.2; stroke-linejoin: round; stroke-linecap: round; }
+.art .l { fill: none; stroke: var(--ink); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.art .t { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.art .k { fill: var(--ink); }
+.art .w { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+.art .f-b { fill: var(--time); }
+.art .f-r { fill: var(--loss); }
+.art .f-l { fill: var(--lcd); }
+.art .f-m { fill: var(--surface-2); }
+.art .band { fill: none; stroke: var(--time); stroke-width: 5; }
+.art .sh { fill: var(--ink); opacity: 0.09; }
+.art .tx { fill: var(--ink); font: 700 12px var(--font); }
+.art .case { fill: var(--case); stroke: var(--ink); stroke-width: 3.2; }
+.art .lcdp { fill: var(--lcd); }
+.art .seg { font: 700 15px "DSEG7", var(--font); fill: var(--lcd-ink); }
+.art .z1 { font-size: 13px; }
+.art .z2 { font-size: 17px; }
+.art .z3 { font-size: 22px; }
+.art.mini .o { stroke-width: 2; }
+.art.mini .t { stroke-width: 1.6; }
+@keyframes steam { 0% { opacity: 0; transform: translateY(5px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translateY(-7px); } }
+.art .steam { animation: steam 2.8s ease-in-out infinite; }
+.art .steam.s2 { animation-delay: 1.2s; }
+@keyframes doze { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+.art .zz text { animation: doze 2.6s ease-in-out infinite; }
+.art .zz .z2 { animation-delay: 0.5s; }
+.art .zz .z3 { animation-delay: 1s; }
+@keyframes roll { to { transform: rotate(360deg); } }
+.art .weed { transform-box: fill-box; transform-origin: center; animation: roll 9s linear infinite; }
+
+/* a remark in the page's own voice, marked by the pawn */
+.quip { display: flex; gap: 9px; align-items: flex-start; font-size: 15px; line-height: 1.4; margin-top: 12px; max-width: 70ch; }
+.quip .art, .sticker-note .art { width: 21px; flex: none; margin-top: -1px; }
+
+/* stickers on the clock casing */
+.stickers { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; margin-top: 18px; padding-left: 3px; }
+.sticker {
+  --r: -2.5deg;
+  border: 0; border-radius: 99px; padding: 4px 11px; font-size: 13px; font-weight: 700; font-variation-settings: "wdth" 90;
+  background: var(--lcd); color: var(--lcd-ink); transform: rotate(var(--r));
+  box-shadow: 0 0 0 2px #eef1e8, 0 3px 0 2px rgba(0, 0, 0, 0.5); transition: transform 0.15s;
+}
+.sticker:nth-child(4n + 2) { --r: 1.8deg; background: #eef1e8; border-radius: 7px; }
+.sticker:nth-child(4n + 3) { --r: -1.2deg; background: #0f9d8a; }
+.sticker:nth-child(4n) { --r: 2.6deg; background: #dd4a2e; border-radius: 7px; }
+.sticker:hover, .sticker[aria-expanded="true"] { transform: rotate(0deg) translateY(-2px); }
+.sticker-note { display: flex; gap: 9px; align-items: flex-start; margin-top: 14px; font-size: 14.5px; line-height: 1.4; color: var(--case-ink); max-width: 76ch; }
+.sticker-note .art .o { fill: var(--case-2); stroke: var(--case-ink); }
+.sticker-note .art .k { fill: var(--case-ink); }
+.sticker-note .art .t { stroke: var(--case-ink); }
+.lcd[role="button"] { cursor: pointer; }
+.lcd[role="button"]:focus-visible { outline: 2px solid #9ec5f4; outline-offset: 3px; border-radius: 8px; }
 
 /* ---------- chart mark colours ---------- */
 .f-time, .f-t2 { fill: var(--time-2); background: var(--time-2); }
