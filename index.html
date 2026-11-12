@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>analyzeyou: how much time chess.com takes from you</title>
+<meta name="description" content="Enter a chess.com username and see how much time went into chess: hours per day, busiest days, rating won and lost, streaks, sessions and the patterns in between.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
+<link rel="preload" href="assets/fonts/DSEG7Classic-Bold.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/style.css">
+<script>
+  // Apply a saved theme before first paint.
+  try { const t = localStorage.getItem('analyzeyou-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#results">Skip to results</a>
+
+<header class="top">
+  <a class="wordmark" href="./" aria-label="analyzeyou, start over">analyzeyou</a>
+  <p class="top-note">analyzing your chess addiction</p>
+  <button class="ghost-btn" id="themeBtn" type="button" aria-label="Switch between light and dark theme">Dark</button>
+</header>
+
+<main>
+  <!-- The clock: the one loud object on the page. Left face is your thinking time, right face your opponents'. -->
+  <section class="clock" aria-label="Choose a player and a date range">
+    <form class="clock-controls" id="form" autocomplete="off">
+      <div class="field field-user">
+        <label for="user">chess.com username</label>
+        <div class="user-row">
+          <input id="user" name="user" type="text" inputmode="text" spellcheck="false" autocapitalize="none" maxlength="25" placeholder="hikaru" aria-describedby="formMsg">
+          <button class="go" id="go" type="submit">Count the time</button>
+        </div>
+      </div>
+      <div class="field field-range">
+        <span class="field-label" id="rangeLabel">Date range</span>
+        <div class="range-row">
+        <div class="presets" id="presets" role="group" aria-labelledby="rangeLabel">
+          <button type="button" data-preset="7">7 days</button>
+          <button type="button" data-preset="30">30 days</button>
+          <button type="button" data-preset="90">90 days</button>
+          <button type="button" data-preset="365">1 year</button>
+          <button type="button" data-preset="all">All time</button>
+        </div>
+        <div class="dates">
+          <label for="from">From</label>
+          <input id="from" type="date">
+          <label for="to">to</label>
+          <input id="to" type="date">
+        </div>
+        </div>
+      </div>
+    </form>
+
+    <div class="faces">
+      <div class="face" id="faceMe">
+        <div class="face-head"><span class="face-name" id="faceMeName">You</span><span class="face-flag" id="flagMe" hidden>thought longer</span></div>
+        <div class="lcd" id="lcdBoxMe" data-side="Me"><span class="lcd-ghost" aria-hidden="true">888:88:88</span><span class="lcd-val" id="lcdMe" aria-hidden="true">0:00:00</span></div>
+        <p class="face-foot" id="faceMeFoot" aria-live="polite">on your clock</p>
+      </div>
+      <div class="lever" aria-hidden="true"><i></i></div>
+      <div class="face" id="faceOpp">
+        <div class="face-head"><span class="face-name">Opponents</span><span class="face-flag" id="flagOpp" hidden>thought longer</span></div>
+        <div class="lcd" id="lcdBoxOpp" data-side="Opp"><span class="lcd-ghost" aria-hidden="true">888:88:88</span><span class="lcd-val" id="lcdOpp" aria-hidden="true">0:00:00</span></div>
+        <p class="face-foot" id="faceOppFoot" aria-live="polite">on their clocks</p>
+      </div>
+    </div>
+    <p class="sr-only" id="clockSr" aria-live="polite"></p>
+    <div class="stickers" id="stickers" hidden></div>
+    <p class="sticker-note" id="stickerNote" aria-live="polite" hidden></p>
+
+    <div class="clock-status" id="status" hidden>
+      <div class="bar"><i id="barFill"></i></div>
+      <span id="statusText">Loading</span>
+      <button type="button" class="link-btn" id="cancelBtn">Stop</button>
+    </div>
+    <p class="form-msg" id="formMsg" role="alert" hidden></p>
+  </section>
+
+  <!-- Before the first search -->
+  <section class="intro" id="intro">
+    <h1>How much of your life went into chess?</h1>
+    <p class="lede">Type a chess.com username and pick a range. The page reads that player's public games straight from chess.com in your browser and adds up the clock: hours per day, the busiest days, rating won and lost, streaks, sessions and the habits hiding in between. Nothing is sent anywhere else.</p>
+    <p class="try">Try one: <button type="button" class="link-btn" data-try="hikaru">hikaru</button>, <button type="button" class="link-btn" data-try="magnuscarlsen">magnuscarlsen</button>, <button type="button" class="link-btn" data-try="gothamchess">gothamchess</button></p>
+  </section>
+
+  <div id="results" hidden>
+    <!-- One filter row scopes everything below it -->
+    <div class="filters" id="filters">
+      <div class="players" id="players" aria-label="Players"></div>
+      <form class="add-player" id="addForm">
+        <label class="sr-only" for="addUser">Add a player to compare</label>
+        <input id="addUser" type="text" spellcheck="false" autocapitalize="none" maxlength="25" placeholder="Compare with…">
+        <button type="submit" class="ghost-btn">Add</button>
+      </form>
+      <div class="seg" id="tcSeg" role="group" aria-label="Time control"></div>
+      <label class="check"><input type="checkbox" id="ratedOnly"> Rated games only</label>
+    </div>
+
+    <section class="summary">
+      <div class="summary-top">
+        <div class="summary-text">
+          <h1 id="headline"></h1>
+          <p class="lede" id="subline"></p>
+        </div>
+        <aside class="verdict" id="verdict" aria-label="The verdict" hidden></aside>
+      </div>
+      <dl class="tiles" id="tiles"></dl>
+    </section>
+
+    <section id="secInsights" class="block">
+      <h2>What stands out</h2>
+      <ul class="insights" id="insights"></ul>
+    </section>
+
+    <section id="secDays" class="block">
+      <div class="block-head">
+        <div>
+          <h2>Day by day</h2>
+          <p class="sub" id="daysSub">Time at the board, and rating won and lost. Pick a bar to open that day.</p>
+        </div>
+        <div class="seg" id="granSeg" role="group" aria-label="Group by"></div>
+      </div>
+      <div class="panel">
+        <div class="legend" id="dayLegend"></div>
+        <div class="chart" id="dayChart"></div>
+      </div>
+      <div class="detail" id="detail" hidden></div>
+      <div class="panel" id="calPanel">
+        <h3>Calendar</h3>
+        <div class="cal-wrap"><div class="cal" id="cal"></div></div>
+        <div class="scale" id="calScale"></div>
+      </div>
+    </section>
+
+    <section id="secElo" class="block">
+      <div class="block-head">
+        <div>
+          <h2>Rating</h2>
+          <p class="sub">Every rated game moves the rating. This is the sum of the ups, the sum of the downs, and where that left it.</p>
+        </div>
+        <div class="seg" id="poolSeg" role="group" aria-label="Rating list"></div>
+      </div>
+      <dl class="tiles tiles-4" id="eloTiles"></dl>
+      <div class="panel"><div class="chart" id="eloChart"></div><p class="note" id="eloNote"></p></div>
+    </section>
+
+    <section id="secStreaks" class="block">
+      <h2>Streaks</h2>
+      <dl class="tiles tiles-4" id="streakTiles"></dl>
+      <div class="panel">
+        <h3 id="tapeTitle">Recent results</h3>
+        <div class="tape" id="tape"></div>
+        <div class="legend" id="tapeLegend"></div>
+      </div>
+    </section>
+
+    <section id="secWhen" class="block">
+      <div class="block-head">
+        <div>
+          <h2>Time of week</h2>
+          <p class="sub" id="whenSub">Each square is one hour of the week.</p>
+        </div>
+        <div class="seg" id="heatSeg" role="group" aria-label="Show"></div>
+      </div>
+      <div class="panel">
+        <div class="heat-wrap"><div class="heat" id="heat"></div></div>
+        <div class="scale" id="heatScale"></div>
+      </div>
+      <div class="panel">
+        <h3>Average time per weekday</h3>
+        <div class="rows" id="dowRows"></div>
+      </div>
+    </section>
+
+    <section id="secSessions" class="block">
+      <h2>Sessions</h2>
+      <p class="sub">A session is a run of games with less than 30 minutes between them.</p>
+      <dl class="tiles tiles-4" id="sessionTiles"></dl>
+      <div class="two">
+        <div class="panel">
+          <h3>Win rate by game number in a session</h3>
+          <div class="chart" id="posChart"></div>
+        </div>
+        <div class="panel">
+          <h3>After a win, after a loss</h3>
+          <div id="tilt"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>How heavy days go</h3>
+        <div class="rows" id="loadRows"></div>
+      </div>
+    </section>
+
+    <section id="secGames" class="block">
+      <h2>The games themselves</h2>
+      <div class="two">
+        <div class="panel">
+          <h3>How long a game takes</h3>
+          <div class="chart" id="histChart"></div>
+        </div>
+        <div class="panel">
+          <h3>Against stronger and weaker players</h3>
+          <div class="rows" id="diffRows"></div>
+        </div>
+      </div>
+      <div class="two">
+        <div class="panel">
+          <h3>On the clock</h3>
+          <div id="clockStats"></div>
+        </div>
+        <div class="panel">
+          <h3>How the games end</h3>
+          <div id="endings"></div>
+        </div>
+      </div>
+      <div class="two">
+        <div class="panel">
+          <h3>Most played openings</h3>
+          <div class="table-wrap"><table class="mini" id="openings"></table></div>
+        </div>
+        <div class="panel">
+          <h3>Most frequent opponents</h3>
+          <div class="table-wrap"><table class="mini" id="opponents"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="secCompare" class="block" hidden>
+      <h2>Player by player</h2>
+      <p class="sub">Same range and filters for everyone. Pick a row to switch the page to that player.</p>
+      <div class="panel"><div class="table-wrap"><table class="ledger" id="compare"></table></div></div>
+    </section>
+
+    <section id="secLedger" class="block">
+      <div class="block-head">
+        <div>
+          <h2>Every day in the range</h2>
+          <p class="sub">The numbers behind the charts. Pick a column heading to sort.</p>
+        </div>
+        <div class="head-actions">
+          <label class="check"><input type="checkbox" id="hideEmpty" checked> Hide days without games</label>
+          <button type="button" class="ghost-btn" id="csvBtn">Download CSV</button>
+        </div>
+      </div>
+      <div class="panel"><div class="table-wrap tall"><table class="ledger" id="ledger"></table></div></div>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <p>Reads public data from the <a href="https://www.chess.com/news/view/published-data-api" rel="noopener">chess.com published-data API</a>, in your browser. Not affiliated with chess.com. Days and hours use your device's time zone<span id="tzNote"></span>.</p>
+  <p><a href="https://github.com/Macle57/analyzeyou" rel="noopener">Source on GitHub</a> <button type="button" class="link-btn" id="clearCache">Clear saved games</button></p>
+</footer>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

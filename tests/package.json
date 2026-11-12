@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Lets `node --test tests/` work: Node 22 resolves the directory through `main`, which imports every *.test.mjs here.",
+  "main": "all.mjs"
+}
