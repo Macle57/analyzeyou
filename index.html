@@ -57,6 +57,8 @@
       </div>
     </form>
 
+    <!-- A month that failed to load: said here, above the totals it makes too small. -->
+    <div class="notice" id="notice" role="status" hidden></div>
     <div class="faces">
       <div class="face" id="faceMe">
         <div class="face-head"><span class="face-name" id="faceMeName">You</span><span class="face-flag" id="flagMe" hidden>thought longer</span></div>
@@ -108,7 +110,7 @@
       <div class="seg" id="tcSeg" role="group" aria-label="Time control"></div>
       <label class="check"><input type="checkbox" id="ratedOnly"> Rated games only</label>
     </div>
-    <p class="notice" id="notice" role="status" hidden></p>
+    <p class="data-note" id="dataNote" hidden></p>
 
     <section id="secCompare" class="compare" hidden>
       <h2>Player by player</h2>
@@ -155,7 +157,7 @@
       <div class="panel cal-panel" id="calPanel">
         <div class="cal-side">
           <h3>Calendar</h3>
-          <div class="cal-box"><div class="cal-wd" id="calWd" aria-hidden="true"></div><div class="cal-wrap"><div class="cal" id="cal"></div></div></div>
+          <div class="cal-box"><div class="cal-wd" id="calWd" aria-hidden="true"></div><div class="cue"><div class="cal-wrap"><div class="cal" id="cal"></div></div></div></div>
           <div class="scale" id="calScale"></div>
         </div>
         <div class="cal-top">
@@ -197,7 +199,7 @@
         <div class="seg" id="heatSeg" role="group" aria-label="Show"></div>
       </div>
       <div class="panel">
-        <div class="heat-wrap"><div class="heat" id="heat"></div></div>
+        <div class="cue heat-cue"><div class="heat-wrap"><div class="heat" id="heat"></div></div></div>
         <div class="scale" id="heatScale"></div>
       </div>
       <div class="panel">
@@ -231,6 +233,7 @@
       <div class="two">
         <div class="panel">
           <h3>How long a game takes</h3>
+          <div class="legend" id="histLegend"></div>
           <div class="chart" id="histChart"></div>
         </div>
         <div class="panel">

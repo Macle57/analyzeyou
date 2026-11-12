@@ -32,6 +32,7 @@
   --time-1: #6da7ec;
   --time-2: #2a78d6;
   --time-3: #104281;
+  --cell-0: #eceee7; /* an empty square on the calendar and the heatmap */
   --win: #0f9d8a;
   --loss: #dd4a2e;
   --draw: #a0a79d;
@@ -58,8 +59,9 @@
     --case-2: #2a332d;
     --time: #3987e5;
     --time-1: #cde2fb;
-    --time-2: #5598e7;
-    --time-3: #184f95;
+    --time-2: #6da7ec;
+    --time-3: #2a78d6;
+    --cell-0: #1b221e;
     --win: #14a896;
     --loss: #e2573c;
     --draw: #6f786f;
@@ -82,8 +84,9 @@
   --case-2: #2a332d;
   --time: #3987e5;
   --time-1: #cde2fb;
-  --time-2: #5598e7;
-  --time-3: #184f95;
+  --time-2: #6da7ec;
+  --time-3: #2a78d6;
+  --cell-0: #1b221e;
   --win: #14a896;
   --loss: #e2573c;
   --draw: #6f786f;
@@ -210,7 +213,7 @@ h1 { font-variation-settings: "wdth" 68; font-weight: 780; font-size: clamp(30px
 .chip[data-state="loading"] { opacity: 0.6; }
 .chip[data-state="error"] { border-color: var(--loss); }
 .add-player { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.add-msg { color: var(--loss); font-size: 13px; flex-basis: 100%; }
+.add-msg { color: var(--loss-text); font-size: 13.5px; flex-basis: 100%; }
 .add-player input { width: 150px; background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
 .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 9px; padding: 2px; gap: 2px; flex-wrap: wrap; }
 .seg button { background: none; border: 0; border-radius: 6px; padding: 5px 11px; font-size: 14px; font-weight: 550; color: var(--ink-2); }
@@ -220,7 +223,15 @@ h1 { font-variation-settings: "wdth" 68; font-weight: 780; font-size: clamp(30px
 .check { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; color: var(--ink-2); }
 .check input { width: 16px; height: 16px; accent-color: var(--ink); }
 .filters .seg { margin-left: auto; }
-.notice { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--loss); background: var(--surface-2); color: var(--ink-2); font-size: 14px; border-radius: 0 8px 8px 0; }
+/* a month that failed to load: said on the clock casing, above the faces it makes too small */
+.notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 16px; padding: 10px 12px 10px 14px; border-left: 4px solid #fab219; background: var(--case-2); color: var(--case-ink); font-size: 14.5px; line-height: 1.35; border-radius: 0 9px 9px 0; }
+.notice span { flex: 1 1 240px; }
+.notice-btn { background: var(--case-ink); color: var(--case); border: 0; border-radius: 8px; padding: 0 16px; min-height: 40px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+.notice-btn:hover { filter: brightness(1.08); }
+.notice + .faces { margin-top: 16px; }
+/* while it is up, each face carries an indicator on the glass, the way a real clock flags a state */
+.clock[data-partial] .lcd::before { content: "partial"; position: absolute; left: 8px; top: 7px; font: 700 11px/1 var(--font); letter-spacing: 0.04em; color: var(--lcd-ink); opacity: 0.85; }
+.data-note { margin-top: 10px; color: var(--muted); font-size: 13.5px; max-width: 86ch; }
 
 /* ---------- summary ---------- */
 .summary { padding: 26px 0 8px; }
@@ -310,7 +321,7 @@ svg:focus:not(:focus-visible) { outline: none; }
 .cal-wrap, .heat-wrap, .table-wrap { overflow-x: auto; }
 .cal { display: grid; grid-auto-flow: column; grid-template-rows: 18px repeat(7, var(--c)); grid-auto-columns: var(--c); gap: 3px; width: max-content; padding: 2px 2px 4px; }
 .cal span { font-size: 11px; color: var(--muted); white-space: nowrap; line-height: 16px; overflow: visible; width: var(--c); }
-.cal button { width: var(--c); height: var(--c); border: 0; padding: 0; border-radius: 3px; background: var(--surface-2); }
+.cal button { width: var(--c); height: var(--c); border: 0; padding: 0; border-radius: 3px; background: var(--cell-0); }
 .cal button:hover, .cal button:focus-visible, .cal button[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
 .cal i { width: var(--c); height: var(--c); }
 .scale { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 10px; }
@@ -321,7 +332,7 @@ svg:focus:not(:focus-visible) { outline: none; }
 .heat { display: grid; grid-template-columns: 38px repeat(24, minmax(18px, 1fr)); gap: 3px; min-width: 580px; }
 .heat .hh { font-size: 11px; color: var(--muted); text-align: left; height: 16px; font-variant-numeric: tabular-nums; }
 .heat .dd { font-size: 12.5px; color: var(--ink-2); align-self: center; }
-.heat .cell { aspect-ratio: 1; max-height: 34px; border-radius: 4px; background: var(--surface-2); min-width: 0; width: 100%; }
+.heat .cell { aspect-ratio: 1; max-height: 34px; border-radius: 4px; background: var(--cell-0); min-width: 0; width: 100%; }
 .heat .cell:hover, .heat .cell:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 /* rows of bars */
@@ -515,8 +526,10 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 }
 .sticker:nth-child(4n + 2) { --r: 1.8deg; background: #eef1e8; border-radius: 7px; }
 .sticker:nth-child(4n + 3) { --r: -1.2deg; background: #0f9d8a; }
-.sticker:nth-child(4n) { --r: 2.6deg; background: #dd4a2e; border-radius: 7px; }
-.sticker:hover, .sticker[aria-expanded="true"] { transform: rotate(0deg) translateY(-2px); }
+.sticker:nth-child(4n) { --r: 2.6deg; background: #e5593b; border-radius: 7px; }
+.sticker:hover { transform: rotate(0deg) translateY(-2px); }
+/* the open sticker is pressed flat and ringed, so it is clear whose note is showing */
+.sticker[aria-expanded="true"] { transform: rotate(0deg) translateY(1px); box-shadow: 0 0 0 2px #eef1e8, 0 0 0 5px var(--case), 0 0 0 7px #eef1e8; }
 .sticker-note { display: flex; gap: 9px; align-items: flex-start; margin-top: 14px; font-size: 14.5px; line-height: 1.4; color: var(--case-ink); max-width: 76ch; }
 .sticker-note .art .o { fill: var(--case-2); stroke: var(--case-ink); }
 .sticker-note .art .k { fill: var(--case-ink); }
@@ -544,15 +557,17 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 .lg b { font-weight: inherit; }
 .lg small {
   position: absolute; right: 0.07em; top: 100%; margin-top: 3px;
-  font: 700 max(9px, 0.19em)/1 var(--font); letter-spacing: 0.03em; opacity: 0.72;
+  font: 700 max(11px, 0.19em)/1 var(--font); letter-spacing: 0.03em; opacity: 0.78;
 }
 @media (min-width: 601px) { .dates .from-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } }
 
 /* compare: directly under the filter row */
 .compare { padding-top: 22px; }
 .compare h2 { font-size: 22px; }
-.compare .panel { margin-top: 10px; }
-.cmp-rows { grid-template-columns: max-content minmax(80px, 1fr) max-content; row-gap: 14px; }
+.compare .panel { margin-top: 10px; padding: 14px 18px 8px; }
+.cmp-rows { grid-template-columns: max-content minmax(80px, 1fr) max-content; row-gap: 10px; }
+.row.cmp.cmp-axis { margin-top: -7px; }
+.compare .note { margin-top: 8px; }
 .row.cmp { align-items: center; }
 .row.cmp .rl { font-size: 15px; }
 .row.cmp .rl .link-btn[aria-pressed="true"] { text-decoration-thickness: 2px; font-weight: 750; }
@@ -561,7 +576,7 @@ td .wdl { display: inline-flex; vertical-align: middle; }
 .cmp-vis.empty { color: var(--muted); font-size: 14px; }
 .cmp-dates { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
 .cmp-strip { display: block; width: 100%; height: 26px; border-bottom: 1px solid var(--axis); }
-.cmp-more { margin-top: 12px; }
+.cmp-more { margin-top: 2px; }
 .cmp-more summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ink-2); padding: 6px 0; width: max-content; }
 .cmp-more[open] summary { margin-bottom: 4px; }
 .add-note { font-size: 14px; color: var(--muted); }
@@ -616,7 +631,7 @@ td .wdl { display: inline-flex; vertical-align: middle; }
   .lineup { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 10px; }
   .verdicts { margin-top: 34px; }
   .cal-panel { gap: 18px; }
-  .lcd { padding-bottom: calc(0.34em + 12px); }
+  .lcd { padding-bottom: calc(0.34em + 15px); }
   .cal-top { flex-basis: 100%; }
   .cmp-rows { column-gap: 8px; }
   /* the day's games: result, opponent, rating change, length and the link; the rest moves to a second line */
@@ -636,17 +651,67 @@ td .wdl { display: inline-flex; vertical-align: middle; }
   .sticker { padding: 10px 13px; }
   .stickers { gap: 12px; }
   .chip button { padding: 10px 13px; }
-  .chip .x { padding: 10px 12px 10px 6px; }
   .ghost-btn { min-height: 40px; }
   .add-player input { min-height: 40px; }
   .check { min-height: 40px; }
   .check input { width: 20px; height: 20px; }
   .ledger th button { padding: 12px 0; }
   .ledger tbody td { padding-top: 11px; padding-bottom: 11px; }
-  .try .link-btn, .tile .n .link-btn, .cal-top .link-btn, .row.cmp .link-btn, .notice .link-btn, .foot .link-btn, .foot a { position: relative; }
-  .try .link-btn::after, .tile .n .link-btn::after, .cal-top .link-btn::after, .row.cmp .link-btn::after, .notice .link-btn::after, .foot .link-btn::after, .foot a::after { content: ""; position: absolute; inset: -11px -4px; }
-  .try { line-height: 2.2; }
+  /* links inside running text: padding with an equal negative margin gives a 40px box and moves nothing */
+  .try .link-btn, .tile .n .link-btn, .lede .link-btn, .foot .link-btn, .foot a { display: inline-block; padding: 11px 3px; margin: -11px -3px; }
+  .try { line-height: 1.9; }
+  /* names in rows: the row itself grows to 40px */
+  .cal-top .rl .link-btn, .row.cmp .rl .link-btn { display: inline-block; padding: 11px 0; }
+  .chip .x { padding: 10px 14px 10px 10px; min-width: 40px; }
+  .ledger tbody td:first-child:has(.cell-btn) { padding-top: 0; padding-bottom: 0; }
+  .ledger .cell-btn { display: block; width: 100%; padding: 12px 0; }
   .cmp-more summary { padding: 11px 0; }
   .games .c-open a { display: inline-block; padding: 9px 0 9px 8px; }
 }
 
+
+/* ---------- review round 2 ---------- */
+
+/* a strip that scrolls sideways fades, with a chevron, at whichever edge has more to show */
+.cue { position: relative; min-width: 0; }
+.cue::before, .cue::after {
+  position: absolute; top: 0; bottom: 0; width: 40px; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.15s;
+  display: flex; align-items: center; font-size: 22px; font-weight: 700; line-height: 1; color: var(--ink-2);
+}
+.cue::before { content: "\2039"; left: 0; justify-content: flex-start; background: linear-gradient(to right, var(--surface) 48%, transparent); }
+.cue::after { content: "\203A"; right: 0; justify-content: flex-end; background: linear-gradient(to left, var(--surface) 48%, transparent); }
+.cue[data-l]::before, .cue[data-r]::after { opacity: 1; }
+.heat-cue::before { left: 38px; } /* the weekday labels stay put; the fade starts after them */
+
+/* the results tape: its one-line summary sits between the title and the blocks */
+#tapeSum { margin: -4px 0 12px; }
+
+@media (max-width: 600px) {
+  /* the ledger takes its full height: one scroll (the page), and sideways for the columns past Net */
+  #secLedger .table-wrap.tall { max-height: none; overflow-y: hidden; }
+  #ledger th, #ledger td, #ledger td.num, #ledger th.num { padding-right: 12px; }
+  /* heatmap squares big enough to tap; the grid scrolls and opens on the busiest hours */
+  .heat { grid-template-columns: 38px repeat(24, minmax(26px, 1fr)); }
+  .notice { margin-top: 14px; }
+  .notice-btn { flex: 1 1 100%; }
+  .compare .panel { padding: 12px 14px 6px; }
+}
+
+@media (max-width: 600px) {
+  /* rows whose second figure is a phrase ("3 games, not enough to judge"): it drops under the first and may wrap */
+  #loadRows .row .rv, .row.few .rv { white-space: normal; max-width: 112px; }
+  #loadRows .row .rv small, .row.few .rv small { display: block; margin-left: 0; }
+  /* the small faces have no room on the glass: the partial flag sits beside the name instead */
+  .clock[data-partial] .lcd::before { content: none; }
+  .clock[data-partial] .face-head::after { content: "partial"; font: 700 11px/1 var(--font); letter-spacing: 0.03em; background: #fab219; color: #1c1500; padding: 3px 7px; border-radius: 99px; white-space: nowrap; }
+}
+@media (max-width: 600px), (pointer: coarse) { .cal-top .rows { row-gap: 0; } }
+
+/* compare, wide screens: the note and the "All the numbers" toggle share one line */
+@media (min-width: 901px) {
+  .compare .panel { display: flow-root; }
+  #cmpNote { float: left; margin-top: 8px; }
+  .cmp-more { margin-top: 0; }
+  .cmp-more summary { float: right; padding: 6px 0 8px; }
+  .cmp-more .table-wrap { clear: both; padding-top: 4px; }
+}

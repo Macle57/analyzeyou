@@ -495,8 +495,19 @@ export function colChart(root, items, o) {
     const x0 = m.l + i * band + (band - bw) / 2;
     // `few`: drawn from too few games to read much into, so muted. A value of 0 gets a stub on the
     // baseline, so "0%" never looks like "no games" (value null), which draws nothing.
-    const cls = d.few ? 'f-muted' : d.cls || 'f-time';
-    if (d.value != null) {
+    // `parts`: the bar stacked by an ordered category (the histogram by time control), a 2px gap of
+    // surface between the pieces and the rounded end on the top one only.
+    const segs = d.parts ? d.parts.filter((p) => p.value > 0) : [];
+    const cls = d.few ? 'f-muted' : segs.length === 1 ? segs[0].cls : d.cls || 'f-time';
+    if (segs.length > 1) {
+      let acc = 0;
+      segs.forEach((p, k) => {
+        const yTop = y(acc + p.value), yBot = y(acc), top = k === segs.length - 1, gapPx = top ? 0 : 2;
+        const hh = Math.max(1, yBot - yTop - gapPx);
+        svg.append(top && hh >= 3 ? S('path', { d: roundedTop(x0, yTop, bw, hh, 4), class: p.cls }) : S('rect', { x: x0, y: yTop + gapPx, width: bw, height: hh, class: p.cls }));
+        acc += p.value;
+      });
+    } else if (d.value != null) {
       const hh = y(0) - y(d.value);
       if (hh >= 3) svg.append(S('path', { d: roundedTop(x0, y(0) - hh, bw, hh, 4), class: cls }));
       else svg.append(S('rect', { x: x0, y: y(0) - 3, width: bw, height: 3, rx: 1, class: cls }));
