@@ -171,7 +171,7 @@ export function verdict(st, who, f, forced) {
     line: tier.line.replace('{t}', f.dur(shown)).replace('{who}', who),
     basis: forced != null && forced !== natural
       ? `Preview of level ${i + 1} of ${TIERS.length}. The real average is ${f.dur(real)} on a day played, which is level ${natural + 1}.`
-      : `Going by the average on days with at least one game: ${t.activeDays} of ${r.days}.`,
+      : `Going by the average on days with at least one live game: ${f.num(t.liveDays)} of ${f.num(r.days)}.`,
   };
   // The single heaviest day gets its own line when it sits in a higher bracket than the average.
   const top = st.records.busiestDay && st.days.find((d) => d.date === st.records.busiestDay);
@@ -191,7 +191,7 @@ export function dayQuip(d, games, f) {
   if (d.time >= 4 * H) return `${f.dur(d.time)}. That was not a quick game before bed.`;
   if (d.bestLossStreak >= 8) return `${d.bestLossStreak} losses in a row, and the queue button still got pressed.`;
   if (d.games === 64) return '64 games. One for every square on the board.';
-  if (d.games >= 50) return `${d.games} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / d.games))} minutes of being awake.`;
+  if (d.games >= 50) return `${f.num(d.games)} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / d.games))} minutes of being awake.`;
   if (d.bestWinStreak >= 10) return `${d.bestWinStreak} wins in a row. Somewhere, ${d.bestWinStreak} opponents are blaming their mouse.`;
   if (night >= 3) return `${night} of these started between 2 and 5 in the morning. Nothing good was ever decided at that hour.`;
   if (d.eloNet <= -50) return `Down ${Math.abs(d.eloNet)} points by bedtime. Tomorrow has a job to do.`;
@@ -213,12 +213,12 @@ export function stickers(st, games, who, f) {
   if (!t.games) return out;
   const fam = FAMOUS[who.toLowerCase()];
   if (fam) add(fam[0], fam[1]);
-  if (t.activeDays === st.range.days && st.range.days >= 7) add('No days off', `Played on all ${st.range.days} days of the range. The streak is safe. Other things may not be.`);
+  if (t.activeDays === st.range.days && st.range.days >= 7) add('No days off', `Played on all ${f.num(st.range.days)} days of the range. The streak is safe. Other things may not be.`);
   let night = 0;
   for (const row of st.heatmap) for (const h of [2, 3, 4]) night += row[h].games;
   if (night >= Math.max(5, t.games * 0.03)) add('Night shift', `${f.num(night)} games started between 2 and 5 in the morning. Nothing good was ever decided at that hour.`);
   const L = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
-  if (L && L.duration >= 3 * H) add('Marathon', `${f.dur(L.duration)} in one sitting, ${L.games} games. Somebody’s legs went numb.`);
+  if (L && L.duration >= 3 * H) add('Marathon', `${f.dur(L.duration)} in one sitting, ${f.num(L.games)} games. Somebody’s legs went numb.`);
   const tl = st.tilt;
   if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.afterLoss.games >= 10) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
   const ll = st.streaks.longestLoss?.length || 0, lw = st.streaks.longestWin?.length || 0;
@@ -230,7 +230,7 @@ export function stickers(st, games, who, f) {
   const up = st.records.biggestUpset != null ? games[st.records.biggestUpset] : null;
   if (up && up.oppRating - up.myRating >= 200) add('Giant killer', `Beat ${up.opponent}, rated ${up.oppRating - up.myRating} points higher. Frame that one.`);
   const rival = st.opponents[0];
-  if (rival && rival.games >= 10) add('Rematch', `${rival.games} games against ${rival.username} alone. At this point, just exchange numbers.`);
+  if (rival && rival.games >= 10) add('Rematch', `${f.num(rival.games)} games against ${rival.username} alone. At this point, just exchange numbers.`);
   const bullet = st.byClass.find((x) => x.timeClass === 'bullet');
   if (bullet && t.games >= 30 && bullet.games / t.games >= 0.7) add('Bullet brain', `${f.pct(bullet.games / t.games)} of the games were bullet. Thinking is for people with time.`);
   const wk = st.byDow.slice(5).reduce((a, d) => a + d.time, 0);

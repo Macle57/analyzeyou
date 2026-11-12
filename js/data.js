@@ -7,7 +7,7 @@ const API = 'https://api.chess.com/pub/player/';
 const DB_NAME = 'analyzeyou';
 const DB_STORE = 'months';
 /** Bump when the stored (normalised) game shape changes; old entries are refetched. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 /** The current month (or a month cached before it ended) is reused for this long. */
 const LIVE_TTL_MS = 5 * 60 * 1000;
 /** A month counts as closed once it has been fetched this long after it ended. */
@@ -131,7 +131,8 @@ export function openingName(ecoUrl) {
     if (dots >= 0) { if (dots > 0) words.push(tok.slice(0, dots)); break; }
     if (tok) words.push(tok);
   }
-  if (!words.length) return null;
+  // chess.com files games it could not classify under /openings/Undefined; that is no opening name.
+  if (!words.length || (words.length === 1 && /^(undefined|null)$/i.test(words[0]))) return null;
   let name = words.join(' ');
   for (const [re, rep] of NAME_FIXES) name = name.replace(re, rep);
   return name;
@@ -598,7 +599,7 @@ async function loadPlayer(name, opts, signal) {
   if (hi < currentMonth && wanted.some((k) => byMonth.get(k)?.some((g) => g.timeClass === 'daily'))) {
     warnings.push(`Daily games that started in this range but ended after ${monthLabel(hi)} are not counted.`);
   }
-  return { player, games, firstArchive, warnings };
+  return { player, games, firstArchive, warnings, failedMonths: rangeFailed.map((k) => k.replace('/', '-')) };
 }
 
 /** Pools whose earliest loaded rated game starts inside the range, so nothing loaded precedes it. */

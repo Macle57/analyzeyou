@@ -309,7 +309,7 @@ h3 { font-size: 15px; font-weight: 650; margin-bottom: 12px; }
 .heat .hh { font-size: 11px; color: var(--muted); text-align: left; height: 16px; font-variant-numeric: tabular-nums; }
 .heat .dd { font-size: 12.5px; color: var(--ink-2); align-self: center; }
 .heat .cell { aspect-ratio: 1; max-height: 34px; border-radius: 4px; background: var(--surface-2); min-width: 0; width: 100%; }
-.heat .cell:hover { outline: 2px solid var(--ink); outline-offset: 1px; }
+.heat .cell:hover, .heat .cell:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 /* rows of bars */
 /* One shared grid per list, so labels size to the longest one and every bar starts on the same line. */
@@ -330,6 +330,9 @@ h3 { font-size: 15px; font-weight: 650; margin-bottom: 12px; }
 .wdl .d { background: var(--draw); }
 .wdl .l { background: var(--loss); }
 .wdl.thin { height: 8px; width: 96px; flex: none; margin-right: 6px; }
+/* too few games to read much into: greyed like the win-rate heatmap's thin slots */
+.row.few .wdl i { background: var(--line); }
+.row.few .rl, .row.few .rv { color: var(--muted); }
 
 /* comparisons (after win / after loss, clock) */
 .pairs { display: grid; gap: 0; }
@@ -370,7 +373,8 @@ tr:last-child td { border-bottom: 0; }
 .ledger th[aria-sort="descending"] button::after { content: " ▼"; font-size: 9px; }
 .ledger tbody tr[data-click] { cursor: pointer; }
 .ledger tbody tr[data-click]:hover td { background: var(--surface-2); }
-.ledger tr[aria-selected="true"] td { background: var(--surface-2); font-weight: 600; }
+.ledger tr[aria-current="true"] td { background: var(--surface-2); font-weight: 600; }
+.ledger .cell-btn { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: inherit; }
 .ledger tfoot td { font-weight: 650; border-top: 1px solid var(--axis); border-bottom: 0; position: sticky; bottom: 0; background: var(--surface); }
 .pill { display: inline-block; min-width: 20px; text-align: center; font-weight: 700; font-size: 12px; border-radius: 4px; padding: 1px 5px; color: #fff; }
 .pill.w { background: var(--win); }

@@ -18,7 +18,7 @@ Tests: `node --test tests/` (or `node --test`). Real-data check: `node scripts/s
 - `signal` is an `AbortSignal`. Aborting rejects with code `aborted`.
 - Extra options for scripts and tests: `fetch` (a custom fetch, used by `scripts/sample.mjs` to send a browser User-Agent), `cache: false`, `cacheStore` (an object with async `get(key)` and `put(key, value)` that replaces IndexedDB), `now` (ms), `retryBaseMs`.
 
-Returns `{ player, games, firstArchive, warnings }`:
+Returns `{ player, games, firstArchive, warnings, failedMonths }`:
 
 - `player`: `{ username, name, avatar, url, country, joined }`. `username` has the canonical casing, taken from the profile URL (the API's `username` field is lowercase). `country` is the ISO-2 code or `null`. `joined` is in ms.
 - `games`: `Game[]`, sorted by start ascending.
@@ -27,6 +27,7 @@ Returns `{ player, games, firstArchive, warnings }`:
   - `Couldn't load Oct 2026; numbers for that month are missing.` when some (not all) months of the range failed.
   - `Daily games that started in this range but ended after Oct 2026 are not counted.` when a month of the range held daily games and the range ends before the current month (see *Not covered* below).
   - The archive-list fallback described below.
+- `failedMonths`: `'YYYY-MM'` of each month of the range that failed to load (the months the first warning names), `[]` when none did. Those months are not cached, so running the same lookup again retries them; the page offers a "Try again" button when the list is not empty.
 
 ### Errors
 
@@ -62,7 +63,7 @@ chess.com files each game under the UTC month of its **end** time. Ranges are in
 - The database is `analyzeyou`, the store is `months`, and the key is `"<lowercased user>|YYYY/MM"`. The value is `{ v: SCHEMA_VERSION, fetchedAt, games }` holding normalised games; raw PGN is never stored.
 - A month is **closed**, and cached forever, once it was fetched at least 1 h after it ended in UTC. Anything else, including the current month, is reused for 5 minutes and then refetched.
 - A month that answered 404 or 410 is stored with `missing: true` and reused for 1 hour only, never as a closed month: chess.com's CDN can serve a stale 404 for a month that has games.
-- Bump `SCHEMA_VERSION` in `js/data.js` when the `Game` shape changes. The store is then recreated.
+- Bump `SCHEMA_VERSION` in `js/data.js` when the `Game` shape changes, or when the stored values change meaning. The store is then recreated. Version 2 (2026-11-12): `opening` is `null` for `/openings/Undefined`.
 - When IndexedDB is missing or fails (Node, some private modes), the module silently runs without a cache. `clearCache()` never throws.
 - `ratingDelta` is computed after merging months, so cached games do not depend on which months were loaded together.
 
@@ -88,7 +89,7 @@ Browser check (headless Chrome, 2026-11-12): a first load of hikaru over 20 days
 | `myThink`, `oppThink` | Seconds each side was on the clock (see below), or `null` |
 | `myClockLeft`, `oppClockLeft` | Seconds left at the end (see below), or `null` |
 | `ratingDelta` | Rating after this game minus rating after the previous **rated** game of the same pool, ordered by end time and searched across everything fetched (seed and walk-back months included). `null` when the game is unrated, when no earlier rated game of that pool was fetched, or when a month that failed to load lies between the two games (the next delta of each pool after a failed month is unknown; continuity resumes after that). |
-| `opening` | Readable name from the opening URL slug, cut before the move tail. For example `Kings-Indian-Defense-Fianchetto-…-System-8.d5-Nb8` becomes `King's Indian Defense Fianchetto … System`. Common apostrophes and hyphens are restored. `null` when there is none. |
+| `opening` | Readable name from the opening URL slug, cut before the move tail. For example `Kings-Indian-Defense-Fianchetto-…-System-8.d5-Nb8` becomes `King's Indian Defense Fianchetto … System`. Common apostrophes and hyphens are restored. `null` when there is none, and for chess.com's catch-all slug `/openings/Undefined`, which it uses for games it could not classify (gothamchess, all time: 792 games). |
 | `eco` | `"E62"` or `null` |
 | `myAccuracy`, `oppAccuracy` | From `accuracies`, or `null` |
 
@@ -150,12 +151,12 @@ Think and clock-left values are `null` when:
 | key | notes |
 |---|---|
 | `range` | `{ from, to, days }`. Uses the local days of `from`/`to`, else the first and last game day, else today. |
-| `totals` | `games, liveGames, wins, losses, draws, time, myThink, oppThink, thinkGames, avgGame, medianGame, activeDays, avgPerActiveDay, avgPerDay, moves`. `myThink`/`oppThink` add up only over `thinkGames`: live games with clock data. `activeDays` counts days with at least one game of any kind. `avgGame` and `medianGame` are over live games. `avgPerDay` divides by every day in the range. |
-| `days[]` | One entry per calendar day, empty days included. `dow` is 0 for Monday. `eloGained` and `eloLost` are both positive and summed across pools. `eloByPool[pool]` is `{ gained, lost, net, games, end }`, where `games` counts rated games and `end` is the rating after that day's last rated game. Streaks count draws as breaking a run. `firstStart` and `lastEnd` use live games only. `sessions` counts the sessions that started that day. |
+| `totals` | `games, liveGames, wins, losses, draws, time, myThink, oppThink, thinkGames, avgGame, medianGame, activeDays, avgPerActiveDay, avgPerDay, moves`. `myThink`/`oppThink` add up only over `thinkGames`: live games with clock data. `activeDays` counts days with at least one game of any kind; `liveDays` counts days with at least one live game. `avgPerActiveDay` is `time / liveDays` (`null` when `liveDays` is 0): daily games carry no time, so days with only daily games would dilute it. `avgGame` and `medianGame` are over live games. `avgPerDay` divides by every day in the range. |
+| `days[]` | One entry per calendar day, empty days included. `dow` is 0 for Monday. `eloGained` and `eloLost` are both positive and summed across pools. `eloByPool[pool]` is `{ gained, lost, net, games, end }`, where `games` counts rated games and `end` is the rating after that day's last rated game. Streaks count draws as breaking a run. `firstStart` and `lastEnd` use live games only. `sessions` counts the sessions that have at least one game starting that day, so a session that runs past midnight counts on both days and every day with a live game has at least 1. |
 | `records` | `busiestDay` (most time), `busiestDayLast30` (most time in the 30 days ending at the earlier of range end and today), `mostGamesDay`, `bestEloDay` (highest `eloNet`, only if > 0), `worstEloDay` (lowest `eloNet`, only if < 0). These are dates or `null`. `longestGame` and `quickestWin` are game indexes over live games. `biggestUpset` is the win with the largest positive pre-game rating gap (see `ratingDiff`). |
 | `elo` | `gained, lost, net, ratedGames`, plus `byPool[]` sorted by game count. Each pool has `start` (first rating minus its delta, or the first rating if the delta is unknown), `end`, `peak`, `low` (from the series) and `series[]` (`{ t: end ms, rating, i }`). `end − start = net` whenever the pool's games are contiguous, which they are unless the UI filtered some out. |
 | `streaks` | `longestWin` and `longestLoss` are `{ length, start, end, startIdx, endIdx }`; `start` is the first game's start and `end` the last game's end. `current` is the outcome and run length of the last game. `longestDayStreak` is `{ length, startDate, endDate }`. `currentDayStreak` counts back from the range end; if the last day is today and has no game yet, counting starts from yesterday. |
-| `sessions` | A session is a run of live games where each starts within `sessionGapMinutes` of the **latest end so far** in the session; overlapping games join. `list[]` holds `{ start, end, duration, games, wins, losses, draws, eloNet, firstIdx, lastIdx }`. `longest` is an index into `list`. `byPosition` covers positions 1–9 and then `10+`, with empty trailing buckets dropped. |
+| `sessions` | A session is a run of live games where each starts within `sessionGapMinutes` of the **latest end so far** in the session; overlapping games join. `list[]` holds `{ start, end, duration, playTime, games, wins, losses, draws, eloNet, firstIdx, lastIdx }`. `duration` is wall-clock seconds from the first start to the latest end, breaks between games included, so the longest session can be longer than the total time. `playTime` is the sum of its games' `duration`s, breaks left out; it is at most `duration` unless games overlap. `longest` is an index into `list`. `byPosition` covers positions 1–9 and then `10+`, with empty trailing buckets dropped. |
 | `heatmap` | 7 × 24 grid, `heatmap[dow][hour]` = `{ games, wins, losses, draws, time, eloNet }` |
 | `byHour`, `byDow` | Same fields. `byDow` also has `activeDays` (days with games on that weekday) and an **added** `days` (how many of that weekday fall in the range), useful for per-day averages. |
 | `tilt` | `afterWin` and `afterLoss` give the result of the **next game in the same session**. `requeueAfterWin` and `requeueAfterLoss` are the fraction of live wins (or losses) followed by a live game starting within 5 minutes of their end, in any session; the very last game counts as not followed. `medianGapAfterWin` and `medianGapAfterLoss` are in seconds, within the same session. |

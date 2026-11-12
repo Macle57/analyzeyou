@@ -46,6 +46,10 @@ test('openingName drops the move-list tail and restores punctuation', () => {
   assert.equal(openingName('https://www.chess.com/openings/Queens-Pawn-Opening-Chigorin-Variation...3.Bf4-a6'), "Queen's Pawn Opening Chigorin Variation");
   assert.equal(openingName('https://www.chess.com/openings/Caro-Kann-Defense'), 'Caro-Kann Defense');
   assert.equal(openingName(null), null);
+  // chess.com files unclassified games under /openings/Undefined: that is no opening.
+  assert.equal(openingName('https://www.chess.com/openings/Undefined'), null);
+  assert.equal(openingName('https://www.chess.com/openings/undefined/'), null);
+  assert.equal(openingName('https://www.chess.com/openings/Undefined-Variation'), 'Undefined Variation');
   assert.equal(openingFamily('Caro-Kann Defense Two Knights Attack'), 'Caro-Kann Defense');
   assert.equal(openingFamily('Closed Sicilian Defense Grand Prix Attack'), 'Closed Sicilian Defense');
 });
@@ -344,6 +348,7 @@ test('a failed month in the range breaks the rating baseline through fetchPlayer
   const d = Object.fromEntries(res.games.map((g) => [g.id, g.ratingDelta]));
   assert.deepEqual(d, { aug: null, oct1: null, oct2: 5 });
   assert.deepEqual(res.warnings, ["Couldn't load Sep 2026; numbers for that month are missing."]);
+  assert.deepEqual(res.failedMonths, ['2026-09'], 'the page offers a retry for these');
 });
 
 test('every month overlapping the range failed -> error, even when the seed month loaded', async () => {

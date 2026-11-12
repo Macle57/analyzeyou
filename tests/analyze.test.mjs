@@ -74,7 +74,8 @@ test('a game belongs to the local day and hour of its start, even across local m
   // One session: the second game starts 5 minutes after the first ends (00:05 -> 00:10).
   assert.equal(s.sessions.count, 1);
   assert.equal(s.days[0].sessions, 1);
-  assert.equal(s.days[1].sessions, 0);
+  // The session that started before midnight also has a game on the 3rd, so that day counts it too.
+  assert.equal(s.days[1].sessions, 1);
 });
 
 test('local day bucketing follows the TZ of the runtime', () => {
@@ -255,4 +256,58 @@ test('fast enough for 20k games', () => {
 test('dayKey uses local calendar fields', () => {
   assert.equal(dayKey(new Date(2026, 0, 5, 0, 0, 1)), '2026-01-05');
   assert.equal(dayKey(new Date(2026, 11, 31, 23, 59, 59).getTime()), '2026-12-31');
+});
+
+test('days count every session with a game that day, not only sessions that started that day', () => {
+  // One session from 23:30 on the 1st running past midnight, one more on the 2nd, nothing on the 3rd.
+  const games = [
+    G(new Date(2026, 10, 1, 23, 30), { duration: 600 }),
+    G(new Date(2026, 10, 1, 23, 45), { duration: 600 }),
+    G(new Date(2026, 10, 2, 0, 5), { duration: 600 }), // same session, next day
+    G(new Date(2026, 10, 2, 0, 20), { duration: 600 }),
+    G(new Date(2026, 10, 2, 9, 0), { duration: 600 }), // a new session
+    G(new Date(2026, 10, 2, 9, 30), { timeClass: 'daily' }), // daily: no session
+  ];
+  const s = analyze(games, { from: new Date(2026, 10, 1), to: new Date(2026, 10, 3, 23, 59) });
+  assert.equal(s.sessions.count, 2);
+  assert.deepEqual(s.days.map((d) => d.sessions), [1, 2, 0]);
+  // Every day with a live game has at least one session.
+  for (const d of s.days) if (d.firstStart != null) assert.ok(d.sessions >= 1, d.date);
+  assert.equal(s.sessions.list.some((x) => '_day' in x), false, 'no internal fields leak');
+});
+
+test('liveDays leaves out days with only daily games, and avgPerActiveDay divides by it', () => {
+  const games = [
+    G(at(5, 10), { duration: 600 }),
+    G(at(5, 11), { duration: 1200 }),
+    G(at(6, 12), { timeClass: 'daily' }),
+    G(at(7, 12), { timeClass: 'daily' }),
+    G(at(8, 9), { duration: 1800 }),
+  ];
+  const s = analyze(games, { from: new Date(2026, 9, 5), to: new Date(2026, 9, 8, 23, 59) });
+  assert.equal(s.totals.activeDays, 4);
+  assert.equal(s.totals.liveDays, 2);
+  assert.equal(s.totals.time, 3600);
+  assert.equal(s.totals.avgPerActiveDay, 1800);
+  // Only daily games: no live day, no average.
+  const d = analyze([G(at(6, 12), { timeClass: 'daily' })], { from: new Date(2026, 9, 6), to: new Date(2026, 9, 6, 23, 59) });
+  assert.equal(d.totals.activeDays, 1);
+  assert.equal(d.totals.liveDays, 0);
+  assert.equal(d.totals.avgPerActiveDay, null);
+  assert.equal(analyze([]).totals.liveDays, 0);
+});
+
+test('sessions carry playTime, the sum of game durations, next to the wall-clock duration', () => {
+  const games = [
+    G(at(10, 9, 0), { duration: 600 }),
+    G(at(10, 9, 25), { duration: 300 }), // 15-minute break before it
+    G(at(10, 9, 55), { duration: 900 }), // 25-minute break
+  ];
+  const s = analyze(games, { from: new Date(2026, 9, 10), to: new Date(2026, 9, 10, 23, 59) });
+  assert.equal(s.sessions.count, 1);
+  const x = s.sessions.list[0];
+  assert.equal(x.playTime, 1800);
+  assert.equal(x.duration, 70 * 60);
+  assert.ok(x.playTime <= x.duration);
+  assert.equal(x.playTime, s.totals.time);
 });
