@@ -516,8 +516,10 @@ async function loadPlayer(name, opts, signal) {
   let wanted;
   let seed = null;
   let firstArchive = null;
+  let lastArchive = null;
   if (available) {
     firstArchive = available.length ? available[0].replace('/', '-') : null;
+    lastArchive = available.length ? available[available.length - 1].replace('/', '-') : null;
     wanted = available.filter((k) => (lo == null || k >= lo) && k <= hi);
     if (lo != null) seed = available.filter((k) => k < lo).pop() ?? null;
   } else {
@@ -599,7 +601,7 @@ async function loadPlayer(name, opts, signal) {
   if (hi < currentMonth && wanted.some((k) => byMonth.get(k)?.some((g) => g.timeClass === 'daily'))) {
     warnings.push(`Daily games that started in this range but ended after ${monthLabel(hi)} are not counted.`);
   }
-  return { player, games, firstArchive, warnings, failedMonths: rangeFailed.map((k) => k.replace('/', '-')) };
+  return { player, games, firstArchive, lastArchive, warnings, failedMonths: rangeFailed.map((k) => k.replace('/', '-')) };
 }
 
 /** Pools whose earliest loaded rated game starts inside the range, so nothing loaded precedes it. */

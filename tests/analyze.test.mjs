@@ -140,6 +140,10 @@ test('sessions split on the gap, positions, tilt and requeue', () => {
   // Live wins: 0 (next in 2 min: yes), 2 (next in 65 min: no), 5 (none) -> 1/3. Losses: 1 (8 min) -> 0.
   assert.equal(s.tilt.requeueAfterWin, 1 / 3);
   assert.equal(s.tilt.requeueAfterLoss, 0);
+  // The denominators come with the rates, so the page can refuse to quote a rate from two games.
+  assert.equal(s.tilt.liveWins, 3);
+  assert.equal(s.tilt.liveWins * s.tilt.requeueAfterWin, 1);
+  assert.equal(s.tilt.liveLosses, 1);
   // Daily game counted in games but not in time.
   assert.equal(s.totals.games, 6);
   assert.equal(s.totals.liveGames, 5);
@@ -310,4 +314,18 @@ test('sessions carry playTime, the sum of game durations, next to the wall-clock
   assert.equal(x.duration, 70 * 60);
   assert.ok(x.playTime <= x.duration);
   assert.equal(x.playTime, s.totals.time);
+});
+
+test('durationHist: round widths, edges on whole multiples, open tail', () => {
+  const games = [];
+  let t = new Date(2026, 9, 1, 9).getTime();
+  // 300 games, 40 s to 7 min 20 s, plus a 25-minute outlier for the tail.
+  for (let k = 0; k < 300; k++) { const d = 40 + ((k * 37) % 400); games.push(G(t, { duration: d })); t += (d + 60) * 1000; }
+  games.push(G(t, { duration: 1500 }));
+  const h = analyze(games).durationHist;
+  const width = h[0].to - h[0].from;
+  assert.equal(width, 30, 'p95 near 7 minutes fits 20 bins of 30 s, not 20 s');
+  for (const b of h) assert.equal(b.from % width, 0);
+  assert.equal(h.at(-1).to, null, 'the 25-minute game lands in the open tail');
+  assert.equal(h.reduce((a, b) => a + b.count, 0), 301);
 });

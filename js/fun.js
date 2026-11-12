@@ -182,58 +182,122 @@ export function verdict(st, who, f, forced) {
 }
 
 // ---------- one day ----------
-// At most one remark per day, heaviest reason first. Each reason has a few variants; the date picks one,
-// so neighbouring days read differently and a day always says the same thing. No line here repeats a
-// sticker's note. Hours of the day are the viewer's clock, and the lines that use them say so.
+// At most one remark per day, heaviest reason first, and no line is said twice in one range: the days
+// are walked in date order and each takes the first line of its reason that is still unused. A reason
+// that has said everything it has passes the day on to its next matching reason, or to no remark at
+// all. No line here repeats a sticker's note. Hours of the day are the viewer's clock, and the lines
+// that use them say so.
 const dayNumber = (date) => { const [y, m, d] = date.split('-').map(Number); return Math.floor(Date.UTC(y, m - 1, d) / 864e5); };
+const REASONS = [
+  { key: 'h10', when: (c) => c.d.time >= 10 * H, lines: [
+    (c) => `${c.t} in one day. Days only come with 24 of those.`,
+    (c) => `${c.t}. The board saw more of this day than the sun did.`,
+    (c) => `${c.t} of chess in a single day. That is most of the waking part.`,
+    (c) => `${c.t}. Whatever else was planned for this day did not happen.`,
+  ] },
+  { key: 'h7', when: (c) => c.d.time >= 7 * H, lines: [
+    (c) => `${c.t} of chess. Longer than a working day, with fewer breaks.`,
+    (c) => `${c.t}. An office would have sent everyone home by then.`,
+    (c) => `${c.t}. This day had a job, and the job was chess.`,
+    (c) => `${c.t}. Long enough that at least one meal was eaten at the board.`,
+  ] },
+  { key: 'h4', when: (c) => c.d.time >= 4 * H, lines: [
+    (c) => `${c.t}. That was not a quick game before bed.`,
+    (c) => `${c.t}. Somewhere a to-do list went untouched.`,
+    (c) => `${c.t} at the board. Lunch was probably eaten with one hand.`,
+    (c) => `${c.t}. A film and its sequel would have been shorter.`,
+    (c) => `${c.t}. The plan was almost certainly one game.`,
+    (c) => `${c.t} of chess. The rest of the day got what was left.`,
+  ] },
+  { key: 'ls', when: (c) => c.ls >= 8, lines: [
+    (c) => `${c.ls} losses in a row, and the queue button still got pressed.`,
+    (c) => `${c.ls} straight losses. The stopping point was passed several games ago.`,
+    (c) => `${c.ls} losses back to back. Persistence is a virtue, in moderation.`,
+    (c) => `${c.ls} in a row the wrong way. Each one was going to be the one that fixed it.`,
+  ] },
+  { key: 'g64', when: (c) => c.d.games === 64, lines: [
+    () => '64 games. One for every square on the board.',
+  ] },
+  { key: 'g50', when: (c) => c.d.games >= 50, lines: [
+    (c) => `${c.g} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / c.d.games))} minutes of being awake.`,
+    (c) => `${c.g} games. The mouse has earned a day off.`,
+    (c) => `${c.g} games in one day. Plenty of people take a year over that many.`,
+    (c) => `${c.g} games. Each one was going to be the last.`,
+    (c) => `${c.g} games in a day. The opponents changed; the chair did not.`,
+    (c) => `${c.g} games. A tournament plays nine rounds and calls it a week.`,
+    (c) => `${c.g} in one day. The new-game button held up well.`,
+  ] },
+  { key: 'ws', when: (c) => c.ws >= 10, lines: [
+    (c) => `${c.ws} wins in a row. A fair few mice got blamed.`,
+    (c) => `${c.ws} straight wins. The rating graph briefly looked like a wall.`,
+    (c) => `${c.ws} wins on the trot. Nobody stops on a day like that, and nobody did.`,
+    (c) => `${c.ws} in a row. The opponents would like a word with matchmaking.`,
+    (c) => `${c.ws} wins without a miss. Stopping there was an option nobody considered.`,
+    (c) => `${c.ws} straight. Days like this are why the queue button gets pressed on the bad ones.`,
+    (c) => `${c.ws} wins running. Enjoyable for exactly one of the two people in each game.`,
+    (c) => `A run of ${c.ws}. It felt like skill at the time, and some of it was.`,
+  ] },
+  { key: 'night', when: (c) => c.night >= 3, lines: [
+    (c) => `${c.night} of these started between 2 and 5 in the morning, going by your clock.`,
+    (c) => `${c.night} games began after 2 a.m. on your clock. If that is the player’s clock too, sleep lost.`,
+    (c) => `${c.night} starts between 2 and 5 a.m. your time. Where the opponents live, it may have been lunch.`,
+    (c) => `${c.night} games in the small hours, by your clock. The site never closes, which is the problem.`,
+    (c) => `${c.night} starts between 2 and 5 a.m. on your clock. Somewhere it was a perfectly reasonable hour.`,
+  ] },
+  { key: 'down', when: (c) => c.d.eloNet <= -50, lines: [
+    (c) => `Down ${c.pts} points by bedtime. Tomorrow has a job to do.`,
+    (c) => `${c.pts} points gone in a day. They took a good deal longer to collect.`,
+    (c) => `Minus ${c.pts}. The rating will be back. Probably.`,
+    (c) => `${c.pts} points handed out to strangers. Generous.`,
+    (c) => `Down ${c.pts}. The sensible stopping point was some games earlier.`,
+  ] },
+  { key: 'up', when: (c) => c.d.eloNet >= 50, lines: [
+    (c) => `Up ${c.pts} points in a day. The correct move is to stop. It will not be played.`,
+    (c) => `Plus ${c.pts}. Screenshot it before tomorrow happens.`,
+    (c) => `${c.pts} points up. Days like this are why the bad ones get forgiven.`,
+    (c) => `Plus ${c.pts} in a day. Tomorrow will want some of that back.`,
+    (c) => `Up ${c.pts}. For one evening the number was telling the truth.`,
+  ] },
+  { key: 'one', when: (c) => c.d.games === 1 && c.d.losses === 1, lines: [
+    () => 'One game, one loss, and then the laptop was closed. Rare discipline.',
+    () => 'Played one, lost one, left. That is either wisdom or a very short temper.',
+    () => 'One game, lost, and nothing after it. The rematch button went unpressed.',
+    () => 'A single loss and then silence. Most days do not end that cleanly.',
+    () => 'Lost the only game of the day and walked away. It can be done.',
+  ] },
+];
+function quipContext(d, games, f) {
+  const night = games.filter((g) => { const h = new Date(g.start).getHours(); return h >= 2 && h < 5; }).length;
+  return { d, night, t: f.dur(d.time), ls: d.bestLossStreak, ws: d.bestWinStreak, g: f.num(d.games), pts: f.num(Math.abs(d.eloNet)) };
+}
+/**
+ * The remarks for a whole range: Map of 'YYYY-MM-DD' -> line. `days` are the range's days in date order
+ * (stats.days) and `games` the list their gameIdx point into. The same input always gives the same map.
+ */
+export function planQuips(days, games, f) {
+  const used = new Set(), out = new Map();
+  for (const d of days) {
+    if (!d.games) continue;
+    const c = quipContext(d, d.gameIdx.map((i) => games[i]), f);
+    for (const r of REASONS) {
+      if (!r.when(c)) continue;
+      const n = r.lines.length, start = dayNumber(d.date) % n;
+      let hit = -1;
+      for (let k = 0; k < n && hit < 0; k++) { const i = (start + k) % n; if (!used.has(`${r.key}:${i}`)) hit = i; }
+      if (hit < 0) continue; // this reason has said all it has: the day goes to its next reason
+      used.add(`${r.key}:${hit}`);
+      out.set(d.date, r.lines[hit](c));
+      break;
+    }
+  }
+  return out;
+}
+/** One day on its own (no range to avoid repeats in). `games` are that day's games. */
 export function dayQuip(d, games, f) {
   if (!d.games) return null;
-  const pick = (...lines) => lines[dayNumber(d.date) % lines.length];
-  const night = games.filter((g) => { const h = new Date(g.start).getHours(); return h >= 2 && h < 5; }).length;
-  const t = f.dur(d.time), ls = d.bestLossStreak, ws = d.bestWinStreak, g = f.num(d.games);
-  if (d.time >= 10 * H) return pick(
-    `${t} in one day. Days only come with 24 of those.`,
-    `${t}. The board saw more of this day than the sun did.`,
-    `${t} of chess in a single day. That is most of the waking part.`);
-  if (d.time >= 7 * H) return pick(
-    `${t} of chess. Longer than a working day, with fewer breaks.`,
-    `${t}. An office would have sent everyone home by then.`,
-    `${t}. This day had a job, and the job was chess.`);
-  if (d.time >= 4 * H) return pick(
-    `${t}. That was not a quick game before bed.`,
-    `${t}. Somewhere a to-do list went untouched.`,
-    `${t} at the board. Lunch was probably eaten with one hand.`,
-    `${t}. A film and its sequel would have been shorter.`);
-  if (ls >= 8) return pick(
-    `${ls} losses in a row, and the queue button still got pressed.`,
-    `${ls} straight losses. The stopping point was passed several games ago.`,
-    `${ls} losses back to back. Persistence is a virtue, in moderation.`);
-  if (d.games === 64) return '64 games. One for every square on the board.';
-  if (d.games >= 50) return pick(
-    `${g} games in a day. That is one every ${Math.max(1, Math.round((16 * 60) / d.games))} minutes of being awake.`,
-    `${g} games. The mouse has earned a day off.`,
-    `${g} games in one day. Plenty of people take a year over that many.`);
-  if (ws >= 10) return pick(
-    `${ws} wins in a row. Somewhere, ${ws} opponents are blaming their mouse.`,
-    `${ws} straight wins. The rating graph briefly looked like a wall.`,
-    `${ws} wins on the trot. Nobody stops on a day like that, and nobody did.`,
-    `${ws} in a row. The opponents would like a word with matchmaking.`);
-  if (night >= 3) return pick(
-    `${night} of these started between 2 and 5 in the morning, going by your clock.`,
-    `${night} games began after 2 a.m. on your clock. If that is the player’s clock too, sleep lost.`,
-    `${night} starts between 2 and 5 a.m. your time. Where the opponents live, it may have been lunch.`);
-  if (d.eloNet <= -50) return pick(
-    `Down ${Math.abs(d.eloNet)} points by bedtime. Tomorrow has a job to do.`,
-    `${Math.abs(d.eloNet)} points gone in a day. They took a good deal longer to collect.`,
-    `Minus ${Math.abs(d.eloNet)}. The rating will be back. Probably.`);
-  if (d.eloNet >= 50) return pick(
-    `Up ${d.eloNet} points in a day. The correct move is to stop. It will not be played.`,
-    `Plus ${d.eloNet}. Screenshot it before tomorrow happens.`,
-    `${d.eloNet} points up. Days like this are why the bad ones get forgiven.`);
-  if (d.games === 1 && d.losses === 1) return pick(
-    'One game, one loss, and then the laptop was closed. Rare discipline.',
-    'Played one, lost one, left. That is either wisdom or a very short temper.');
-  return null;
+  const c = quipContext(d, games, f);
+  const r = REASONS.find((x) => x.when(c));
+  return r ? r.lines[dayNumber(d.date) % r.lines.length](c) : null;
 }
 
 // ---------- stickers on the clock ----------
@@ -257,13 +321,13 @@ export function stickers(st, games, who, f) {
   const L = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
   if (L && L.duration >= 3 * H) add('Marathon', `${f.dur(L.duration)} in one sitting, ${f.num(L.games)} games. Somebody’s legs went numb.`);
   const tl = st.tilt;
-  if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.afterLoss.games >= 10) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
+  if (tl.requeueAfterLoss != null && tl.requeueAfterLoss >= 0.9 && tl.liveLosses >= 20) add('One more game', `After ${f.pct(tl.requeueAfterLoss)} of losses the next game started within five minutes. “One more” is doing a lot of work.`);
   const ll = st.streaks.longestLoss?.length || 0, lw = st.streaks.longestWin?.length || 0;
   if (ll >= 10) add('Free fall', `${ll} losses in a row. Game ${ll + 1} was a choice.`);
   if (lw >= 10) add('On a heater', `${lw} wins in a row. ${lw} people closed the tab annoyed.`);
   const c = st.clock;
-  if (c.timeoutWins >= 5 && t.wins >= 15 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
-  if (c.timeoutLosses >= 5 && t.losses >= 12 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
+  if (c.timeoutWins >= 5 && t.wins >= 20 && c.timeoutWins / t.wins >= 0.2) add('Flag merchant', `${f.num(c.timeoutWins)} wins came on the clock, ${f.pct(c.timeoutWins / t.wins)} of them all. A win is a win, says the flag.`);
+  if (c.timeoutLosses >= 5 && t.losses >= 20 && c.timeoutLosses / t.losses >= 0.25) add('Time trouble', `${f.num(c.timeoutLosses)} losses on time. The position was fine. The clock disagreed.`);
   const up = st.records.biggestUpset != null ? games[st.records.biggestUpset] : null;
   if (up && t.games >= 5 && up.oppRating - up.myRating >= 200) add('Giant killer', `Beat ${up.opponent}, rated ${up.oppRating - up.myRating} points higher. Frame that one.`);
   const rival = st.opponents[0];

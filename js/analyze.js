@@ -314,6 +314,8 @@ export function analyze(games, opts = {}) {
     afterLoss: withRate(tiltLoss),
     requeueAfterWin: rate(requeueWin, liveWins),
     requeueAfterLoss: rate(requeueLoss, liveLosses),
+    liveWins,
+    liveLosses,
     medianGapAfterWin: median(gapsWin),
     medianGapAfterLoss: median(gapsLoss),
   };
@@ -461,14 +463,16 @@ function openingFamilyOf(name) {
   return f;
 }
 
-const NICE_WIDTHS = [5, 10, 15, 20, 30, 60, 90, 120, 180, 300, 600, 900, 1200, 1800, 3600, 7200];
+// Every width divides the next round unit up (a minute, an hour), so each bin edge is a whole number of
+// that width and reads exactly: 0, 30s, 1m, 1m 30s, never 20 s bins that a chart has to round to minutes.
+export const HIST_WIDTHS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
 /** Bins from 0 up to ~the 95th percentile, then one open bin (to = null) for the tail. */
-function durationHistogram(durations) {
+export function durationHistogram(durations) {
   if (!durations.length) return [];
   const sorted = Float64Array.from(durations).sort();
   const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
   const max = sorted[sorted.length - 1];
-  const width = NICE_WIDTHS.find((w) => Math.ceil(p95 / w) <= 20) ?? Math.ceil(p95 / 20 / 3600) * 3600;
+  const width = HIST_WIDTHS.find((w) => Math.ceil(p95 / w) <= 20) ?? Math.ceil(p95 / 20 / 7200) * 7200;
   let n = Math.max(1, Math.ceil(p95 / width));
   // Skip an open tail bin when the data ends inside the regular bins.
   const tail = max >= n * width;

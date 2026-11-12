@@ -25,7 +25,12 @@ export function tipBox(title, rows = [], note) {
   return f;
 }
 
-export function showTip(x, y, content) {
+// The chart whose readout the tooltip shows (null for plain marks). A chart that loses focus hides the
+// tooltip only if it is still its own: a tap on another chart shows that chart's tooltip first, and
+// only then moves the focus, so the first chart's blur would otherwise hide the new one.
+let tipOwner = null;
+export function showTip(x, y, content, owner = null) {
+  tipOwner = owner;
   const t = tipEl();
   t.replaceChildren(content);
   t.hidden = false;
@@ -46,6 +51,62 @@ export function showTipAt(node, content) {
 }
 /** True for a finger or a pen: no hover, so a tap shows the tooltip and it stays until the next tap or a scroll. */
 export const isTouch = (e) => e.pointerType != null && e.pointerType !== 'mouse';
+/** A tooltip's content as one sentence, for a live region: "Title: key value, key value." */
+export function tipText(content) {
+  const parts = [];
+  let title = '';
+  for (const n of content.childNodes ?? []) {
+    if (n.tagName === 'STRONG') title = n.textContent;
+    else if (n.className === 'tr') parts.push([...n.childNodes].map((c) => c.textContent).join(' '));
+    else if (n.textContent) parts.push(n.textContent);
+  }
+  return `${title}${title && parts.length ? ': ' : ''}${parts.join(', ')}.`;
+}
+
+/**
+ * The keyboard half of every chart, shared so they all behave alike: the chart is one tab stop; Left and
+ * Right move between its `n` marks, PageUp and PageDown by a twentieth, Home and End to the ends; the
+ * mark gets the same tooltip as hover and a live region reads it out. Escape hides the readout (and
+ * stops there, so the page's own Escape handling waits for a second press).
+ * o: { n, start(key) -> index to move from before any move, mark(i), unmark(), tip(i), at(i) -> [x, y]
+ *      in client px, announce(text), onEnter(i) }
+ */
+export function readout(svg, o) {
+  let cur = -1, shown = false;
+  const show = (i, cx, cy) => {
+    cur = i; shown = true; o.mark?.(i);
+    const content = o.tip(i);
+    if (cx == null) { [cx, cy] = o.at(i); o.announce?.(tipText(content)); }
+    showTip(cx, cy, content, svg);
+  };
+  const leave = () => { shown = false; o.unmark?.(); if (tipOwner === svg) hideTip(); };
+  svg.setAttribute('tabindex', 0);
+  const page = Math.max(2, Math.round(o.n / 20));
+  svg.addEventListener('keydown', (e) => {
+    const k = e.key;
+    const move = { ArrowLeft: -1, ArrowRight: 1, PageUp: -page, PageDown: page }[k];
+    if (move != null || k === 'Home' || k === 'End') {
+      e.preventDefault();
+      const from = cur >= 0 ? cur : o.start?.(k) ?? -1;
+      const to = k === 'Home' ? 0 : k === 'End' ? o.n - 1 : from < 0 ? (move < 0 ? o.n - 1 : 0) : from + move;
+      show(Math.max(0, Math.min(o.n - 1, to)));
+    } else if ((k === 'Enter' || k === ' ') && cur >= 0 && o.onEnter) { e.preventDefault(); o.onEnter(cur); }
+    else if (k === 'Escape' && shown) { e.stopPropagation(); leave(); }
+  });
+  svg.addEventListener('blur', leave);
+  return { show, leave, get cur() { return cur; }, set cur(v) { cur = v; }, get shown() { return shown; } };
+}
+/** A visually hidden live region for a chart's keyboard readout. */
+export function liveRegion() {
+  const p = document.createElement('p');
+  p.className = 'sr-only'; p.setAttribute('aria-live', 'polite');
+  return p;
+}
+/** Client coordinates of a point given in a chart's viewBox units (W wide). */
+function toClient(svg, W, x, y) {
+  const r = svg.getBoundingClientRect(), k = r.width / W;
+  return [r.left + x * k, r.top + y * k];
+}
 
 // Tooltips for plain HTML marks: put data on the node with setTip(node, fn). Hover shows it, so does
 // keyboard focus, and so does a tap on a touch screen.
@@ -141,12 +202,69 @@ function roundedBottom(x, y, w, h, r) {
   return `M${x},${y}V${y + h - r}Q${x},${y + h} ${x + r},${y + h}H${x + w - r}Q${x + w},${y + h} ${x + w},${y + h - r}V${y}Z`;
 }
 
-function pickTicks(n, maxLabels) {
-  if (n <= maxLabels) return [...Array(n).keys()];
-  const out = [];
-  const step = (n - 1) / (maxLabels - 1);
-  for (let i = 0; i < maxLabels; i++) out.push(Math.round(i * step));
-  return [...new Set(out)];
+// Width of a tick label in px. A canvas measures it in the browser; Node (tests) uses an average glyph.
+let measureCtx = null;
+export function textWidth(str, size = 11.5) {
+  if (measureCtx === null) {
+    try {
+      measureCtx = document.createElement('canvas').getContext('2d');
+      measureCtx.font = `${size}px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`;
+    } catch { measureCtx = false; }
+  }
+  return measureCtx ? measureCtx.measureText(str).width : str.length * size * 0.55;
+}
+/**
+ * Which buckets of a band axis get a label: every `step`-th bucket counting back from the last, with
+ * the smallest step at which no two labels touch. `width(i)` is label i's width; a label is centred on
+ * its band but kept inside [x0, x1]. The first label alone is dropped when only it collides (it is
+ * squeezed against the left edge), rather than doubling the step for everyone.
+ * Returns [{ i, x, anchor }] with x the text position for that anchor.
+ */
+export function evenTicks(n, x0, x1, width, gap = 12) {
+  if (n <= 0) return [];
+  const band = (x1 - x0) / n;
+  const place = (i) => {
+    const c = x0 + i * band + band / 2, w = width(i);
+    if (c - w / 2 < x0) return { i, x: x0, anchor: 'start', l: x0, r: x0 + w };
+    if (c + w / 2 > x1) return { i, x: x1, anchor: 'end', l: x1 - w, r: x1 };
+    return { i, x: c, anchor: 'middle', l: c - w / 2, r: c + w / 2 };
+  };
+  for (let step = 1; step <= n; step++) {
+    const at = [];
+    for (let i = n - 1; i >= 0; i -= step) at.unshift(place(i));
+    let ok = true;
+    for (let k = 2; k < at.length && ok; k++) ok = at[k - 1].r + gap <= at[k].l;
+    if (!ok) continue;
+    if (at.length >= 2 && at[0].r + gap > at[1].l) at.shift();
+    return at.map(({ i, x, anchor }) => ({ i, x, anchor }));
+  }
+  return [];
+}
+
+/** A duration as an exact axis label: 0, 45s, 1m, 1m 30s, 2h, 1h 30m. Nothing is rounded away. */
+export function durLabel(s) {
+  s = Math.round(s);
+  if (s === 0) return '0';
+  if (s < 60) return `${s}s`;
+  if (s < 3600) { const m = Math.floor(s / 60), r = s % 60; return r ? `${m}m ${r}s` : `${m}m`; }
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+const LABEL_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400];
+/**
+ * Labels for a duration histogram (bins of one width, from js/analyze.js): the edges that are whole
+ * multiples of the smallest round step (a multiple of the bin width) giving at most `maxLabels`.
+ * The open tail bin is labelled "6m+" when it is a step edge. Returns [{ i, label }].
+ */
+export function histTicks(bins, maxLabels) {
+  if (!bins.length) return [];
+  const width = bins.find((b) => b.to != null)?.to - bins.find((b) => b.to != null)?.from || bins[0].from || 1;
+  const steps = LABEL_STEPS.filter((s) => s % width === 0);
+  if (!steps.length || steps[0] !== width) steps.unshift(width);
+  const pick = (step) => bins.map((b, i) => ({ i, b })).filter(({ b }) => b.from % step === 0);
+  let at = pick(steps[steps.length - 1]);
+  for (const step of steps) { const p = pick(step); if (p.length <= Math.max(1, maxLabels)) { at = p; break; } }
+  return at.map(({ i, b }) => ({ i, label: b.to == null ? `${durLabel(b.from)}+` : durLabel(b.from) }));
 }
 
 // ---------- day chart: time columns above, rating won/lost below, one shared x ----------
@@ -165,7 +283,7 @@ export function dayChart(root, buckets, o) {
   const iw = W - m.l - m.r, band = iw / n;
   const bw = Math.max(1, Math.min(24, band >= 8 ? band - 2 : band >= 4 ? band - 1 : band));
   const bx = (i) => m.l + i * band + (band - bw) / 2;
-  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'group', 'aria-label': o.label, 'data-chart': 'day' });
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': o.label, 'data-chart': 'day' });
 
   // time panel
   const ts = timeScale(maxOf(buckets, (b) => b.time, 60));
@@ -231,17 +349,14 @@ export function dayChart(root, buckets, o) {
 
   // x labels
   const yx = H - 6;
-  for (const i of pickTicks(n, Math.max(2, Math.floor(iw / (o.tickWidth || (small ? 64 : 84)))))) {
-    const x = m.l + i * band + band / 2;
-    const anchor = x < m.l + 24 ? 'start' : x > W - m.r - 24 ? 'end' : 'middle';
-    svg.append(S('text', { x: anchor === 'start' ? m.l : anchor === 'end' ? W - m.r : x, y: yx, 'text-anchor': anchor, class: 'tick' }, o.tick(buckets[i])));
+  const labels = buckets.map((b) => o.tick(b));
+  for (const t of evenTicks(n, m.l, W - m.r, (i) => textWidth(labels[i]))) {
+    svg.append(S('text', { x: t.x, y: yx, 'text-anchor': t.anchor, class: 'tick' }, labels[t.i]));
   }
 
   // interaction
   const hit = S('rect', { x: m.l, y: 0, width: iw, height: H, fill: 'transparent', style: 'cursor:pointer' });
   svg.append(hit);
-  // `cur` is the bar the keyboard is on; it survives a re-render through o.cursorKey.
-  let cur = o.cursorKey != null ? buckets.findIndex((b) => b.key === o.cursorKey) : -1;
   const place = (rect, i) => { rect.setAttribute('x', m.l + i * band); rect.setAttribute('visibility', 'visible'); };
   const selI = buckets.findIndex((b) => b.key === o.selectedKey);
   if (selI >= 0) place(selBand, selI);
@@ -250,33 +365,22 @@ export function dayChart(root, buckets, o) {
     const x = ((e.clientX - r.left) / r.width) * W;
     return Math.max(0, Math.min(n - 1, Math.floor((x - m.l) / band)));
   };
-  let shown = false; // whether the hover band and tooltip are up
-  const hover = (i, cx, cy) => {
-    cur = i; shown = true; place(hovBand, i);
-    o.onCursor?.(buckets[i]);
-    if (cx == null) {
-      const r = svg.getBoundingClientRect();
-      cx = r.left + ((m.l + i * band + band / 2) / W) * r.width; cy = r.top + 40;
-      o.announce?.(buckets[i]); // keyboard: the tooltip alone says nothing to a screen reader
-    }
-    showTip(cx, cy, o.tip(buckets[i]));
-  };
-  const leave = () => { shown = false; hovBand.setAttribute('visibility', 'hidden'); hideTip(); };
-  // Touch has no hover: a tap is a click and opens the bar, so the pointer events below are for the mouse.
-  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) hover(idxAt(e), e.clientX, e.clientY); });
-  hit.addEventListener('pointerleave', (e) => { if (!isTouch(e)) { leave(); cur = -1; } });
-  hit.addEventListener('click', (e) => o.onSelect(buckets[idxAt(e)], false));
-  svg.addEventListener('keydown', (e) => {
-    const k = e.key;
-    if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') {
-      e.preventDefault();
-      const from = cur >= 0 ? cur : selI >= 0 ? selI : k === 'ArrowLeft' ? n : -1;
-      const to = k === 'Home' ? 0 : k === 'End' ? n - 1 : from + (k === 'ArrowLeft' ? -1 : 1);
-      hover(Math.max(0, Math.min(n - 1, to)));
-    } else if ((k === 'Enter' || k === ' ') && cur >= 0) { e.preventDefault(); o.onSelect(buckets[cur], true); }
-    else if (k === 'Escape' && shown) { e.stopPropagation(); leave(); } // the next Escape reaches the page and closes the open day
+  const nav = readout(svg, {
+    n, start: () => (selI >= 0 ? selI : -1),
+    mark: (i) => { place(hovBand, i); o.onCursor?.(buckets[i]); },
+    unmark: () => hovBand.setAttribute('visibility', 'hidden'),
+    tip: (i) => o.tip(buckets[i]),
+    at: (i) => toClient(svg, W, m.l + i * band + band / 2, 40),
+    // The day chart has its own live region and its own sentence (o.announce), not the tooltip's text.
+    announce: () => o.announce?.(buckets[nav.cur]),
+    onEnter: (i) => o.onSelect(buckets[i], true),
   });
-  svg.addEventListener('blur', leave);
+  // The bar the keyboard is on survives a re-render through o.cursorKey.
+  nav.cur = o.cursorKey != null ? buckets.findIndex((b) => b.key === o.cursorKey) : -1;
+  // Touch has no hover: a tap is a click and opens the bar, so the pointer events below are for the mouse.
+  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) nav.show(idxAt(e), e.clientX, e.clientY); });
+  hit.addEventListener('pointerleave', (e) => { if (!isTouch(e)) { nav.leave(); nav.cur = -1; } });
+  hit.addEventListener('click', (e) => o.onSelect(buckets[idxAt(e)], false));
   root.replaceChildren(svg);
   if (hadFocus) svg.focus({ preventScroll: true });
 }
@@ -288,7 +392,7 @@ export function lineChart(root, pts, o) {
   const W = Math.max(280, Math.floor(root.clientWidth));
   const m = { l: 44, r: 56, t: 18, b: 26 }, h = W < 520 ? 180 : 240, H = m.t + h + m.b;
   const iw = W - m.l - m.r;
-  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'line' });
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': `${o.label}. Use the left and right arrow keys, Page Up, Page Down, Home and End to read the games.`, 'data-chart': 'line' });
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
   let lo = minOf(pts, (p) => p.v), hi = maxOf(pts, (p) => p.v);
   if (o.start != null) { lo = Math.min(lo, o.start); hi = Math.max(hi, o.start); }
@@ -324,7 +428,9 @@ export function lineChart(root, pts, o) {
   const last = pts[pts.length - 1];
   let peak = pts[0];
   for (const p of pts) if (p.v > peak.v) peak = p;
-  const dot = (p, cls = 'f-time') => S('circle', { cx: x(p.t), cy: y(p.v), r: 4.5, class: cls + ' ring' });
+  // No surface-coloured ring on these two: on a one-game spike the ring painted over the last few
+  // pixels of the line, so the peak dot seemed to float above it. Drawn plain, the line runs into it.
+  const dot = (p, cls = 'f-time') => S('circle', { cx: x(p.t), cy: y(p.v), r: 4, class: cls });
   if (peak !== last && x(last.t) - x(peak.t) > 46) {
     svg.append(dot(peak));
     svg.append(S('text', { x: x(peak.t), y: y(peak.v) - 9, 'text-anchor': x(peak.t) < m.l + 40 ? 'start' : 'middle', class: 'lab' }, `Peak ${peak.v}`));
@@ -336,21 +442,31 @@ export function lineChart(root, pts, o) {
   const cdot = S('circle', { r: 4.5, class: 'f-ink ring', visibility: 'hidden' });
   const hit = S('rect', { x: m.l, y: 0, width: iw + 8, height: H, fill: 'transparent' });
   svg.append(cross, cdot, hit);
-  const point = (e) => {
+  const live = liveRegion();
+  const nav = readout(svg, {
+    n: pts.length,
+    mark: (k) => {
+      const p = pts[k];
+      cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.setAttribute('visibility', 'visible');
+      cdot.setAttribute('cx', x(p.t)); cdot.setAttribute('cy', y(p.v)); cdot.setAttribute('visibility', 'visible');
+    },
+    unmark: () => { cross.setAttribute('visibility', 'hidden'); cdot.setAttribute('visibility', 'hidden'); },
+    tip: (k) => o.tip(pts[k]),
+    at: (k) => toClient(svg, W, x(pts[k].t), Math.max(m.t, y(pts[k].v) - 10)),
+    announce: (text) => { live.textContent = text; },
+  });
+  const nearest = (e) => {
     const r = svg.getBoundingClientRect();
     const px = ((e.clientX - r.left) / r.width) * W;
     const t = t1 === t0 ? t0 : t0 + ((px - m.l) / iw) * (t1 - t0);
     let a = 0, b = pts.length - 1;
     while (b - a > 1) { const mid = (a + b) >> 1; if (pts[mid].t < t) a = mid; else b = mid; }
-    const p = Math.abs(pts[a].t - t) <= Math.abs(pts[b].t - t) ? pts[a] : pts[b];
-    cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.setAttribute('visibility', 'visible');
-    cdot.setAttribute('cx', x(p.t)); cdot.setAttribute('cy', y(p.v)); cdot.setAttribute('visibility', 'visible');
-    showTip(e.clientX, e.clientY, o.tip(p));
+    return Math.abs(pts[a].t - t) <= Math.abs(pts[b].t - t) ? a : b;
   };
-  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) point(e); });
-  hit.addEventListener('pointerdown', (e) => { if (isTouch(e)) point(e); }); // a tap pins the readout
-  hit.addEventListener('pointerleave', (e) => { if (isTouch(e)) return; cross.setAttribute('visibility', 'hidden'); cdot.setAttribute('visibility', 'hidden'); hideTip(); });
-  root.append(svg);
+  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) nav.show(nearest(e), e.clientX, e.clientY); });
+  hit.addEventListener('pointerdown', (e) => { if (isTouch(e)) nav.show(nearest(e), e.clientX, e.clientY); }); // a tap pins the readout
+  hit.addEventListener('pointerleave', (e) => { if (!isTouch(e)) nav.leave(); });
+  root.append(svg, live);
 }
 
 // ---------- plain columns (histogram, win rate by game number) ----------
@@ -360,7 +476,7 @@ export function colChart(root, items, o) {
   const W = Math.max(240, Math.floor(root.clientWidth));
   const m = { l: 40, r: 6, t: 14, b: 24 }, h = 170, H = m.t + h + m.b;
   const iw = W - m.l - m.r, n = items.length, band = iw / n, bw = Math.max(2, Math.min(24, band - 2));
-  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label, 'data-chart': 'col' });
+  const svg = S('svg', { viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': `${o.label}. Use the left and right arrow keys, Home and End to read the bars.`, 'data-chart': 'col' });
   const sc = o.max ? { max: o.max, step: o.step } : niceMax(maxOf(items, (d) => d.value || 0, 0), 4);
   const y = (v) => m.t + h - (v / sc.max) * h;
   for (let v = 0; v <= sc.max + 1e-9; v += sc.step) {
@@ -368,19 +484,58 @@ export function colChart(root, items, o) {
     svg.append(S('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, o.fmtY ? o.fmtY(v) : v));
   }
   if (o.ref != null) svg.append(S('line', { x1: m.l, x2: W - m.r, y1: y(o.ref), y2: y(o.ref), class: 'ref' }));
-  const every = Math.ceil(n / Math.max(1, Math.floor(iw / (o.labelWidth || 34))));
+  const maxLabels = Math.max(1, Math.floor(iw / (o.labelWidth || 34)));
+  // o.ticks(maxLabels) -> [{ i, label }] picks the labels (the histogram labels round edges only);
+  // otherwise every k-th bar is labelled with its own label.
+  const every = Math.ceil(n / maxLabels);
+  const ticks = o.ticks ? o.ticks(maxLabels) : items.map((d, i) => ({ i, label: d.label })).filter(({ i }) => i % every === 0);
+  const hov = S('rect', { class: 'hover-band', y: m.t - 4, height: h + 4, width: band, visibility: 'hidden' });
+  svg.append(hov);
   items.forEach((d, i) => {
     const x0 = m.l + i * band + (band - bw) / 2;
-    if (d.value != null) {
-      const hh = Math.max(d.value > 0 ? 1.5 : 0, y(0) - y(d.value));
-      if (hh > 0) svg.append(S('path', { d: roundedTop(x0, y(0) - hh, bw, hh, 4), class: d.cls || 'f-time' }));
+    // `few`: drawn from too few games to read much into, so muted. A value of 0 gets a stub on the
+    // baseline, so "0%" never looks like "no games" (value null), which draws nothing.
+    // `parts`: the bar stacked by an ordered category (the histogram by time control), a 2px gap of
+    // surface between the pieces and the rounded end on the top one only.
+    const segs = d.parts ? d.parts.filter((p) => p.value > 0) : [];
+    const cls = d.few ? 'f-muted' : segs.length === 1 ? segs[0].cls : d.cls || 'f-time';
+    if (segs.length > 1) {
+      let acc = 0;
+      segs.forEach((p, k) => {
+        const yTop = y(acc + p.value), yBot = y(acc), top = k === segs.length - 1, gapPx = top ? 0 : 2;
+        const hh = Math.max(1, yBot - yTop - gapPx);
+        svg.append(top && hh >= 3 ? S('path', { d: roundedTop(x0, yTop, bw, hh, 4), class: p.cls }) : S('rect', { x: x0, y: yTop + gapPx, width: bw, height: hh, class: p.cls }));
+        acc += p.value;
+      });
+    } else if (d.value != null) {
+      const hh = y(0) - y(d.value);
+      if (hh >= 3) svg.append(S('path', { d: roundedTop(x0, y(0) - hh, bw, hh, 4), class: cls }));
+      else svg.append(S('rect', { x: x0, y: y(0) - 3, width: bw, height: 3, rx: 1, class: cls }));
     }
-    if (i % every === 0) svg.append(S('text', { x: m.l + i * band + band / 2, y: H - 6, 'text-anchor': 'middle', class: 'tick' }, d.label));
-    const hitR = S('rect', { x: m.l + i * band, y: m.t, width: band, height: h, fill: 'transparent' });
-    hitR.addEventListener('pointermove', (e) => { if (!isTouch(e)) showTip(e.clientX, e.clientY, d.tip()); });
-    hitR.addEventListener('pointerdown', (e) => { if (isTouch(e)) showTip(e.clientX, e.clientY, d.tip()); });
-    hitR.addEventListener('pointerleave', (e) => { if (!isTouch(e)) hideTip(); });
-    svg.append(hitR);
   });
-  root.append(svg);
+  // A bar's label sits under its left edge: the histogram's labels are bin edges, and so are the bars'.
+  for (const t of ticks) {
+    const lx = o.ticks ? m.l + t.i * band : m.l + t.i * band + band / 2, w = textWidth(t.label);
+    const anchor = lx - w / 2 < m.l - 30 ? 'start' : lx + w / 2 > W ? 'end' : 'middle';
+    svg.append(S('text', { x: anchor === 'end' ? W : lx, y: H - 6, 'text-anchor': anchor, class: 'tick' }, t.label));
+  }
+  const hit = S('rect', { x: m.l, y: 0, width: iw, height: H, fill: 'transparent' });
+  svg.append(hit);
+  const live = liveRegion();
+  const nav = readout(svg, {
+    n,
+    mark: (i) => { hov.setAttribute('x', m.l + i * band); hov.setAttribute('visibility', 'visible'); },
+    unmark: () => hov.setAttribute('visibility', 'hidden'),
+    tip: (i) => items[i].tip(),
+    at: (i) => toClient(svg, W, m.l + i * band + band / 2, m.t + 30),
+    announce: (text) => { live.textContent = text; },
+  });
+  const idxAt = (e) => {
+    const r = svg.getBoundingClientRect();
+    return Math.max(0, Math.min(n - 1, Math.floor((((e.clientX - r.left) / r.width) * W - m.l) / band)));
+  };
+  hit.addEventListener('pointermove', (e) => { if (!isTouch(e)) nav.show(idxAt(e), e.clientX, e.clientY); });
+  hit.addEventListener('pointerdown', (e) => { if (isTouch(e)) nav.show(idxAt(e), e.clientX, e.clientY); });
+  hit.addEventListener('pointerleave', (e) => { if (!isTouch(e)) nav.leave(); });
+  root.append(svg, live);
 }
