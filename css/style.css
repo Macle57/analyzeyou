@@ -307,6 +307,22 @@ svg:focus:not(:focus-visible) { outline: none; }
 .tip .tr { display: flex; justify-content: space-between; gap: 18px; }
 .tip .tr span:last-child { font-weight: 650; font-variant-numeric: tabular-nums; }
 
+/* longest-session breakdown: a tile with more to show underlines its label the way an abbr does */
+.tile.has-tip dt { text-decoration: underline dotted var(--axis); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+.tile.has-tip:focus-visible { outline-offset: -2px; border-radius: 0; }
+.tip:has(.st) { max-width: 320px; }
+.st { min-width: 230px; }
+.st .tr { font-variant-numeric: tabular-nums; }
+.st .tr span:first-child { white-space: nowrap; }
+/* the session drawn to scale: solid where the clock ran, a hairline across the breaks */
+.st-bar { display: flex; align-items: center; height: 10px; margin: 6px 0 7px; }
+.st-bar i { display: block; min-width: 2px; }
+.st-play { height: 10px; background: currentColor; border-radius: 2px; }
+.st-gap { height: 0; border-top: 1px dashed currentColor; opacity: 0.5; margin: 0 1px; }
+.st-break { opacity: 0.62; font-size: 12px; padding-left: 10px; }
+.st-break span:last-child { font-weight: 500; }
+.st-note { opacity: 0.75; margin-top: 4px; font-size: 12px; }
+
 /* day detail */
 .detail { scroll-margin: 16px; margin-top: 14px; border: 2px solid var(--ink); border-radius: var(--r); padding: 18px; background: var(--surface); }
 .detail-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }

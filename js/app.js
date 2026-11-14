@@ -577,6 +577,39 @@ function dayLink(date, f = dfMed) {
 function setTiles(root, tiles) { root.dataset.n = String(tiles.length); root.replaceChildren(...tiles); }
 // A session runs on the wall clock, breaks included, so its length can exceed the playing time inside it.
 const sessionPlay = (x) => (x.duration - x.playTime >= 60 ? `, ${dur(x.playTime)} of it at the board` : '');
+// The longest session as stretches of play and the breaks between them (js/analyze.js sessionStretches:
+// pauses under 5 minutes stay inside a stretch). Up to SESSION_ROWS stretches are listed; the bar always
+// shows them all.
+const SESSION_ROWS = 8;
+const hm = (t) => dfTime.format(new Date(t));
+function sessionSpan(x) {
+  const a = new Date(x.start), b = new Date(x.end);
+  return ymd(a) === ymd(b) ? `${sd(x.start)}, ${hm(x.start)} to ${hm(x.end)}` : `${sd(x.start)}, ${hm(x.start)} to ${sd(x.end)}, ${hm(x.end)}`;
+}
+function sessionTip(x) {
+  const parts = x.stretches || [];
+  const total = Math.max(1, x.end - x.start);
+  const bar = el('div', { class: 'st-bar', 'aria-hidden': 'true' });
+  parts.forEach((p, k) => {
+    if (k) bar.append(el('i', { class: 'st-gap', style: `flex-grow: ${(p.start - parts[k - 1].end) / total}` }));
+    bar.append(el('i', { class: 'st-play', style: `flex-grow: ${Math.max(p.end - p.start, total / 400) / total}` }));
+  });
+  const rows = [];
+  parts.slice(0, SESSION_ROWS).forEach((p, k) => {
+    if (k) rows.push(el('div', { class: 'tr st-break' }, el('span', { text: 'break' }), el('span', { text: dur((p.start - parts[k - 1].end) / 1000) })));
+    rows.push(el('div', { class: 'tr' }, el('span', { text: `${hm(p.start)}–${hm(p.end)}` }), el('span', { text: `${dur((p.end - p.start) / 1000)}, ${plural(p.games, 'game')}` })));
+  });
+  const more = parts.length - SESSION_ROWS;
+  const note = parts.length <= 1 ? 'No pause of 5 minutes or more. Shorter pauses count as play.'
+    : `${more > 0 ? `${num(more)} more ${more === 1 ? 'stretch' : 'stretches'} until ${hm(x.end)}. ` : ''}Pauses under 5 minutes count as play.`;
+  return el('div', { class: 'st' }, el('strong', { text: sessionSpan(x) }), bar, ...rows, el('div', { class: 'st-note', text: note }));
+}
+/** The same breakdown as one sentence, for screen readers (the tooltip is visual only). */
+function sessionSentence(x) {
+  const parts = x.stretches || [];
+  if (parts.length <= 1) return `${sessionSpan(x)}, without a break of 5 minutes or more.`;
+  return `${sessionSpan(x)}: ${parts.map((p, k) => `${k ? `a ${dur((p.start - parts[k - 1].end) / 1000)} break, then ` : ''}${dur((p.end - p.start) / 1000)} of play`).join(', ')}.`;
+}
 // "+34 won, −8 lost", with words where a side is zero.
 const ratingNote = (g, l) => (g || l ? `${g ? `+${num(g)} won` : 'nothing won'}, ${l ? `${MINUS}${num(l)} lost` : 'nothing lost'}` : 'no change');
 
@@ -627,7 +660,13 @@ function renderSummary(e, who) {
   const rec = st.records, day = (d) => st.days.find((x) => x.date === d);
   const longest = st.sessions.longest != null ? st.sessions.list[st.sessions.longest] : null;
   const b = rec.busiestDay && day(rec.busiestDay), b30 = rec.busiestDayLast30 && day(rec.busiestDayLast30), mg = rec.mostGamesDay && day(rec.mostGamesDay);
-  const sessionTile = tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? [dayLink(ymd(new Date(longest.start))), `, ${plural(longest.games, 'game')}${sessionPlay(longest)}`] : null);
+  const sessionTile = tile('Longest session', longest ? durNode(longest.duration) : '–', longest ? [dayLink(ymd(new Date(longest.start))), `, ${plural(longest.games, 'game')}${sessionPlay(longest)}`, el('span', { class: 'sr-only', text: ` ${sessionSentence(longest)}` })] : null);
+  if (longest) {
+    // Hover, a tap or keyboard focus shows the breakdown (charts.js setTip).
+    setTip(sessionTile, () => sessionTip(longest));
+    sessionTile.tabIndex = 0;
+    sessionTile.classList.add('has-tip');
+  }
   // A median of one or two games says nothing the average does not.
   const avgTile = tile(t.liveGames === 1 ? 'Game length' : 'Average game', durNode(t.avgGame), t.liveGames >= 3 ? `half are under ${dur(t.medianGame)}` : null);
   if (t.liveDays <= 1) {

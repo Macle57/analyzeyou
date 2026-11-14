@@ -302,6 +302,7 @@ export function analyze(games, opts = {}) {
   while (posBuckets.length && posBuckets[posBuckets.length - 1].games === 0) posBuckets.pop();
   let longestSession = null;
   sessionList.forEach((s, k) => { if (longestSession == null || s.duration > sessionList[longestSession].duration) longestSession = k; });
+  if (longestSession != null) sessionList[longestSession].stretches = sessionStretches(games, sessionList[longestSession]);
   const sessDur = sessionList.map((s) => s.duration);
   const sessions = {
     count: sessionList.length,
@@ -478,7 +479,30 @@ function openingFamilyOf(name) {
 
 // Every width divides the next round unit up (a minute, an hour), so each bin edge is a whole number of
 // that width and reads exactly: 0, 30s, 1m, 1m 30s, never 20 s bins that a chart has to round to minutes.
-export const HIST_WIDTHS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+/**
+ * A session cut into stretches of play at its breaks: a pause between games of at least `minBreak`
+ * seconds starts a new stretch, a shorter one (the walk to the kettle) stays inside the stretch.
+ * Each stretch is `{ start, end, games }` (ms, ms, count); the break before stretch k is
+ * `stretches[k].start - stretches[k - 1].end`. Gaps run from the latest end so far, as sessions do.
+ */
+export function sessionStretches(games, session, minBreak = 300) {
+  const out = [];
+  let cur = null;
+  for (let i = session.firstIdx; i <= session.lastIdx; i++) {
+    const g = games[i];
+    if (!g.live) continue;
+    if (cur && g.start - cur.end < minBreak * 1000) {
+      cur.games++;
+      if (g.end > cur.end) cur.end = g.end;
+    } else {
+      cur = { start: g.start, end: g.end, games: 1 };
+      out.push(cur);
+    }
+  }
+  return out;
+}
+
+export const HIST_WIDTHS =[5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
 /** Bins from 0 up to ~the 95th percentile, then one open bin (to = null) for the tail. */
 export function durationHistogram(durations) {
   if (!durations.length) return [];
