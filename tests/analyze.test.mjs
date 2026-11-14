@@ -370,3 +370,25 @@ test('gaps mark the days of a month that failed to load as missing', () => {
   }
   assert.ok(analyze([], { from: new Date(2026, 9, 1), to: new Date(2026, 9, 3) }).days.every((d) => d.missing === false));
 });
+
+test('the longest session splits into stretches at breaks of 5 minutes or more; shorter pauses stay inside', () => {
+  const games = [
+    G(at(12, 9, 0), { duration: 600 }), // 9:00-9:10
+    G(at(12, 9, 14), { duration: 600 }), // 4-minute pause: same stretch, ends 9:24
+    G(at(12, 9, 29), { duration: 300 }), // exactly 5 minutes: a new stretch, ends 9:34
+    G(at(12, 9, 34), { timeClass: 'daily' }), // daily: never part of a session
+    G(at(12, 10, 0), { duration: 600 }), // 26-minute break
+    G(at(12, 12, 0), { duration: 300 }), // a separate, shorter session
+  ];
+  const s = analyze(games, { from: new Date(2026, 9, 12), to: new Date(2026, 9, 12, 23, 59) });
+  const L = s.sessions.list[s.sessions.longest];
+  assert.deepEqual(L.stretches.map((x) => [x.start, x.end, x.games]), [
+    [at(12, 9, 0).getTime(), at(12, 9, 24).getTime(), 2],
+    [at(12, 9, 29).getTime(), at(12, 9, 34).getTime(), 1],
+    [at(12, 10, 0).getTime(), at(12, 10, 10).getTime(), 1],
+  ]);
+  assert.equal(sum(L.stretches, (x) => x.games), L.games);
+  assert.equal(L.stretches[0].start, L.start);
+  assert.equal(L.stretches.at(-1).end, L.end);
+  assert.equal(s.sessions.list.filter((x) => 'stretches' in x).length, 1, 'only the longest session carries them');
+});
